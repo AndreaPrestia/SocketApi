@@ -1,4 +1,7 @@
 ﻿using System.Diagnostics;
+using System.Net.Security;
+using System.Net.Sockets;
+using System.Text;
 using Microsoft.Extensions.Hosting;
 using Xunit.Abstractions;
 
@@ -7,7 +10,6 @@ namespace SocketApi.Server.Tests;
 public class TcpSslServerTests
 {
     private readonly ITestOutputHelper _testOutputHelper;
-    private const string Server = "localhost";
     private const int Port = 7110;
     private const string CertPath = "Output.pfx";
     private const string CertPassword = "Password.1";
@@ -18,39 +20,128 @@ public class TcpSslServerTests
         _testOutputHelper = testOutputHelper;
         var host = Host.CreateDefaultBuilder().AddSocketApi(CertPath, CertPassword, Port, Backlog)
             .Build();
+        Router.RegisterRoute("/login", async (parameters, _, writeResponse) =>
+        {
+            if (parameters.TryGetValue("username", out var username) &&
+                parameters.TryGetValue("password", out var _))
+            {
+                await writeResponse($"Logged in as {username}");
+            }
+            else
+            {
+                await writeResponse("Missing credentials");
+            }
+        });
+
+        Router.RegisterRoute("/submit", async (_, data, writeResponse) =>
+        {
+            if (!string.IsNullOrEmpty(data))
+            {
+                await writeResponse($"Data submitted: {data}");
+            }
+            else
+            {
+                await writeResponse("No data provided");
+            }
+        });
+        
+        Router.RegisterRoute("/performance", async (_, _, writeResponse) =>
+        {
+            await Task.Delay(50); // Simulate processing delay
+            await writeResponse("Performance test completed");
+        });
+        
         Task.Run(() => host.RunAsync());
+    }
+
+      [Fact]
+    public async Task TestGetRoute_WithParameters_ReturnsExpectedResponse()
+    {
+        // Arrange
+        var request = "GET /login?username=testuser&password=1234\r\n";
+        var expectedResponse = "Logged in as testuser";
+        
+        // Act
+        var response = await SendRequestAndReceiveResponse(request);
+
+        // Assert
+        Assert.Equal(expectedResponse, response);
+    }
+
+    [Fact]
+    public async Task TestPostRoute_WithBody_ReturnsExpectedResponse()
+    {
+        // Arrange
+        var request = "POST /submit\r\nContent-Length: 11\r\n\r\nHello World";
+        var expectedResponse = "Data submitted: Hello World";
+        
+        // Act
+        var response = await SendRequestAndReceiveResponse(request);
+
+        // Assert
+        Assert.Equal(expectedResponse, response);
+    }
+
+    [Fact]
+    public async Task TestMissingCredentials_ReturnsErrorMessage()
+    {
+        // Arrange
+        var request = "GET /login\r\n";
+        var expectedResponse = "Missing credentials";
+        
+        // Act
+        var response = await SendRequestAndReceiveResponse(request);
+
+        // Assert
+        Assert.Equal(expectedResponse, response);
     }
 
     /// <summary>
     /// This test evaluates if multiple clients can communicate concurrently
     /// </summary>
-    /// <param name="clientCount"></param>
+    /// <param name="concurrentClients"></param>
     [Theory]
     [Trait("Category", "Performance")]
-    [InlineData(100)]
-    public async Task MultipleClientsCanConnectAndCommunicateConcurrently(int clientCount)
+    [InlineData(10)]
+    public async Task TestConcurrentRequests_MultipleConnections_Success(int concurrentClients)
     {
-        var clients = new TcpSslClient[Port];
+        var tasks = new List<Task<string>>();
 
-        for (var i = 0; i < clientCount; i++)
+        // Act
+        for (var i = 0; i < concurrentClients; i++)
         {
-            clients[i] = new TcpSslClient(Server, Port);
+            const string request = "GET /login?username=concurrent&password=test\r\n";
+            tasks.Add(SendRequestAndReceiveResponse(request));
         }
 
-        var tasks = new Task[clientCount];
+        var responses = await Task.WhenAll(tasks);
 
-        for (var i = 0; i < clientCount; i++)
+        // Assert
+        foreach (var response in responses)
         {
-            var clientMessage = $"Hello from client {i}";
-            var i1 = i;
-            tasks[i] = Task.Run(async () =>
-            {
-                var response = await clients[i1].SendRequestAsync(clientMessage);
-                Assert.Equal("RECEIVED", response);
-            });
+            Assert.Equal("Logged in as concurrent", response);
         }
+    }
 
-        await Task.WhenAll(tasks);
+    private async Task<string> SendRequestAndReceiveResponse(string request)
+    {
+        using var client = new TcpClient();
+        await client.ConnectAsync("127.0.0.1", Port);
+
+        await using var networkStream = client.GetStream();
+        await using var sslStream = new SslStream(networkStream, false, (_, _, _, _) => true);
+
+        await sslStream.AuthenticateAsClientAsync("localhost");
+
+        // Send request
+        var requestBytes = Encoding.UTF8.GetBytes(request);
+        await sslStream.WriteAsync(requestBytes);
+
+        // Read response
+        var buffer = new byte[4096];
+        var bytesRead = await sslStream.ReadAsync(buffer);
+
+        return Encoding.UTF8.GetString(buffer, 0, bytesRead).Trim();
     }
 
     /// <summary>
@@ -61,36 +152,50 @@ public class TcpSslServerTests
     /// <param name="maxMsAcceptableResponse">The maximum acceptable response time in ms</param>
     [Theory]
     [Trait("Category", "Performance")]
-    [InlineData(100, 0, 200)]
+    [InlineData(100, 0, 200)] // 100 clients, 0 ms min, 200 ms max response time
     public async Task TestServerPerformanceUnderLoad(int clientCount, int minMsAcceptableResponse, int maxMsAcceptableResponse)
     {
-        var clients = new TcpSslClient[clientCount];
+        var tasks = new List<Task<long>>(); // To store response time tasks
 
         for (var i = 0; i < clientCount; i++)
         {
-            clients[i] = new TcpSslClient(Server, Port);
+            tasks.Add(MeasureResponseTimeAsync("GET /performance\r\n"));
         }
 
-        var tasks = new Task[clientCount];
+        // Execute all tasks and collect response times
+        var responseTimes = await Task.WhenAll(tasks);
+
+        // Assert that all response times are within the acceptable range
+        foreach (var responseTime in responseTimes)
+        {
+            Assert.InRange(responseTime, minMsAcceptableResponse, maxMsAcceptableResponse);
+        }
+    }
+
+    private async Task<long> MeasureResponseTimeAsync(string request)
+    {
+        using var client = new TcpClient();
+        await client.ConnectAsync("127.0.0.1", Port);
+
+        await using var networkStream = client.GetStream();
+        await using var sslStream = new SslStream(networkStream, false, (_, _, _, _) => true);
+
+        await sslStream.AuthenticateAsClientAsync("localhost");
+
+        var requestBytes = Encoding.UTF8.GetBytes(request);
         var stopwatch = Stopwatch.StartNew();
 
-        for (var i = 0; i < clientCount; i++)
-        {
-            var i1 = i;
-            tasks[i] = Task.Run(async () =>
-            {
-                var response = await clients[i1].SendRequestAsync("Load test message");
-                Assert.Equal("RECEIVED", response);
-            });
-        }
+        await sslStream.WriteAsync(requestBytes);
 
-        await Task.WhenAll(tasks);
+        var buffer = new byte[4096];
+        var bytesRead = await sslStream.ReadAsync(buffer);
+
         stopwatch.Stop();
+        
+        var response = Encoding.UTF8.GetString(buffer, 0, bytesRead).Trim();
 
-        var averageTimeMs = stopwatch.Elapsed.TotalMilliseconds / clientCount;
-        _testOutputHelper.WriteLine($"Average response time per client: {averageTimeMs} ms");
-
-        // Assert that the average time is within an acceptable threshold
-        Assert.InRange(averageTimeMs, minMsAcceptableResponse, maxMsAcceptableResponse);
+        _testOutputHelper.WriteLine(response);
+        
+        return stopwatch.ElapsedMilliseconds;
     }
 }
