@@ -62,8 +62,8 @@ internal sealed class TcpSslServer : IHostedService
             var buffer = new byte[4096];
             var bytesRead = await sslStream.ReadAsync(buffer, cancellationToken);
 
-            var (method, route, parameters, body) = ParseCustomProtocol(buffer.Take(bytesRead).ToArray());
-            _logger.LogDebug("Method: {method}, Route: {route}", method, route);
+            var (route, parameters, body) = ParseCustomProtocol(buffer.Take(bytesRead).ToArray());
+            _logger.LogDebug("Route: {route}", route);
 
             async Task WriteResponse(string responseMessage)
             {
@@ -71,7 +71,6 @@ internal sealed class TcpSslServer : IHostedService
                 await sslStream.WriteAsync(responseBytes, cancellationToken);
             }
 
-            // Route the request based on parsed route
             await Router.RouteRequestAsync(route, parameters, body, WriteResponse);
         }
         catch (Exception ex)
@@ -84,71 +83,36 @@ internal sealed class TcpSslServer : IHostedService
         }
     }
 
-    private (string method, string route, Dictionary<string, string> parameters, string body) ParseCustomProtocol(
+    private (string route, Dictionary<string, string> parameters, string body) ParseCustomProtocol(
         byte[] requestBytes)
     {
         var requestText = System.Text.Encoding.UTF8.GetString(requestBytes);
         var lines = requestText.Split(new[] { "\r\n" }, StringSplitOptions.None);
 
-        // The first line will be the request line (e.g., "GET /route?param=value HTTP/1.1" or "POST /route HTTP/1.1")
-        var requestLine = lines[0];
-        var requestParts = requestLine.Split(' ');
+        var route = lines[0];
 
-        if (requestParts.Length < 2)
-            throw new FormatException("Invalid request format");
-
-        var method = requestParts[0]; // GET or POST
-        var route = requestParts[1]; // Route with potential query parameters (for GET)
-
-        Dictionary<string, string> parameters = new();
+        var parameters = new Dictionary<string, string>();
         var body = string.Empty;
 
-        if (method.Equals("GET", StringComparison.OrdinalIgnoreCase))
-        {
-            // Parse route and query parameters for GET request
-            var routeParts = route.Split('?');
-            route = routeParts[0]; // Base route
+        var routeParts = route.Split('?');
+        route = routeParts[0];
 
-            if (routeParts.Length > 1)
+        if (routeParts.Length > 1)
+        {
+            var queryParams = routeParts[1].Split('&');
+            foreach (var param in queryParams)
             {
-                var queryParams = routeParts[1].Split('&');
-                foreach (var param in queryParams)
-                {
-                    var keyValue = param.Split('=');
-                    if (keyValue.Length == 2)
-                        parameters[keyValue[0]] = keyValue[1];
-                }
+                var keyValue = param.Split('=');
+                if (keyValue.Length == 2)
+                    parameters[keyValue[0]] = keyValue[1];
             }
         }
-        else if (method.Equals("POST", StringComparison.OrdinalIgnoreCase))
+
+        for (var i = 1; i < lines.Length; i++)
         {
-            // Parse the Content-Length header to get the body
-            var contentLength = 0;
-            var bodyStarted = false;
-
-            for (var i = 1; i < lines.Length; i++)
-            {
-                if (string.IsNullOrEmpty(lines[i]))
-                {
-                    bodyStarted = true;
-                    continue;
-                }
-
-                if (bodyStarted)
-                {
-                    body += lines[i];
-                }
-                else if (lines[i].StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase))
-                {
-                    int.TryParse(lines[i].Split(':')[1].Trim(), out contentLength);
-                }
-            }
-
-            // Ensure body length matches Content-Length
-            if (body.Length > contentLength)
-                body = body.Substring(0, contentLength);
+            body += lines[i];
         }
 
-        return (method, route, parameters, body);
+        return (route, parameters, body);
     }
 }

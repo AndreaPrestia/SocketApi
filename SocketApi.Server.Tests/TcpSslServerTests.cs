@@ -3,21 +3,18 @@ using System.Net.Security;
 using System.Net.Sockets;
 using System.Text;
 using Microsoft.Extensions.Hosting;
-using Xunit.Abstractions;
 
 namespace SocketApi.Server.Tests;
 
 public class TcpSslServerTests
 {
-    private readonly ITestOutputHelper _testOutputHelper;
     private const int Port = 7110;
     private const string CertPath = "Output.pfx";
     private const string CertPassword = "Password.1";
     private const int Backlog = 110;
 
-    public TcpSslServerTests(ITestOutputHelper testOutputHelper)
+    public TcpSslServerTests()
     {
-        _testOutputHelper = testOutputHelper;
         var host = Host.CreateDefaultBuilder().AddSocketApi(CertPath, CertPassword, Port, Backlog)
             .Build();
         Router.RegisterRoute("/login", async (parameters, _, writeResponse) =>
@@ -44,23 +41,23 @@ public class TcpSslServerTests
                 await writeResponse("No data provided");
             }
         });
-        
-        Router.RegisterRoute("/performance", async (_, _, writeResponse) =>
+
+        Router.RegisterRoute("/performance", async (_, data, writeResponse) =>
         {
             await Task.Delay(50); // Simulate processing delay
-            await writeResponse("Performance test completed");
+            await writeResponse($"Performance test completed with data {data}");
         });
-        
+
         Task.Run(() => host.RunAsync());
     }
 
-      [Fact]
+    [Fact]
     public async Task TestGetRoute_WithParameters_ReturnsExpectedResponse()
     {
         // Arrange
-        var request = "GET /login?username=testuser&password=1234\r\n";
-        var expectedResponse = "Logged in as testuser";
-        
+        var request = "/login?username=TestUser&password=1234\r\n";
+        var expectedResponse = "Logged in as TestUser";
+
         // Act
         var response = await SendRequestAndReceiveResponse(request);
 
@@ -72,9 +69,9 @@ public class TcpSslServerTests
     public async Task TestPostRoute_WithBody_ReturnsExpectedResponse()
     {
         // Arrange
-        var request = "POST /submit\r\nContent-Length: 11\r\n\r\nHello World";
+        var request = "/submit\r\nHello World";
         var expectedResponse = "Data submitted: Hello World";
-        
+
         // Act
         var response = await SendRequestAndReceiveResponse(request);
 
@@ -86,9 +83,9 @@ public class TcpSslServerTests
     public async Task TestMissingCredentials_ReturnsErrorMessage()
     {
         // Arrange
-        var request = "GET /login\r\n";
+        var request = "/login\r\n";
         var expectedResponse = "Missing credentials";
-        
+
         // Act
         var response = await SendRequestAndReceiveResponse(request);
 
@@ -110,7 +107,7 @@ public class TcpSslServerTests
         // Act
         for (var i = 0; i < concurrentClients; i++)
         {
-            const string request = "GET /login?username=concurrent&password=test\r\n";
+            const string request = "/login?username=concurrent&password=test\r\n";
             tasks.Add(SendRequestAndReceiveResponse(request));
         }
 
@@ -133,11 +130,9 @@ public class TcpSslServerTests
 
         await sslStream.AuthenticateAsClientAsync("localhost");
 
-        // Send request
         var requestBytes = Encoding.UTF8.GetBytes(request);
         await sslStream.WriteAsync(requestBytes);
 
-        // Read response
         var buffer = new byte[4096];
         var bytesRead = await sslStream.ReadAsync(buffer);
 
@@ -155,24 +150,29 @@ public class TcpSslServerTests
     [InlineData(100, 0, 200)] // 100 clients, 0 ms min, 200 ms max response time
     public async Task TestServerPerformanceUnderLoad(int clientCount, int minMsAcceptableResponse, int maxMsAcceptableResponse)
     {
-        var tasks = new List<Task<long>>(); // To store response time tasks
+        //Arrange
+        var tasks = new List<Task<Tuple<string, long>>>(); // To store response time tasks
 
         for (var i = 0; i < clientCount; i++)
         {
-            tasks.Add(MeasureResponseTimeAsync("GET /performance\r\n"));
+            tasks.Add(MeasureResponseTimeAsync($"/performance\r\nClient Number: {i}"));
         }
 
-        // Execute all tasks and collect response times
-        var responseTimes = await Task.WhenAll(tasks);
+        //Act
+        var responses = await Task.WhenAll(tasks);
 
-        // Assert that all response times are within the acceptable range
-        foreach (var responseTime in responseTimes)
+        //Assert
+        var index = 0;
+        foreach (var response in responses)
         {
-            Assert.InRange(responseTime, minMsAcceptableResponse, maxMsAcceptableResponse);
+            var data = $"Client Number: {index}";
+            Assert.Equal($"Performance test completed with data {data}", response.Item1);
+            Assert.InRange(response.Item2, minMsAcceptableResponse, maxMsAcceptableResponse);
+            index++;
         }
     }
 
-    private async Task<long> MeasureResponseTimeAsync(string request)
+    private async Task<Tuple<string, long>> MeasureResponseTimeAsync(string request)
     {
         using var client = new TcpClient();
         await client.ConnectAsync("127.0.0.1", Port);
@@ -191,11 +191,9 @@ public class TcpSslServerTests
         var bytesRead = await sslStream.ReadAsync(buffer);
 
         stopwatch.Stop();
-        
+
         var response = Encoding.UTF8.GetString(buffer, 0, bytesRead).Trim();
 
-        _testOutputHelper.WriteLine(response);
-        
-        return stopwatch.ElapsedMilliseconds;
+        return new Tuple<string, long>(response, stopwatch.ElapsedMilliseconds);
     }
 }
