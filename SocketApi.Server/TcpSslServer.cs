@@ -14,7 +14,7 @@ internal sealed class TcpSslServer : IHostedService
     private readonly int _port;
     private readonly int _backlog;
     private readonly X509Certificate2 _certificate;
-    private readonly ConcurrentBag<Task> _connectionTasks = new ConcurrentBag<Task>();
+    private readonly ConcurrentDictionary<Guid, Task> _connectionTasks = new();
     private readonly ILogger<TcpSslServer> _logger;
     private CancellationToken _cancellationToken;
 
@@ -37,16 +37,25 @@ internal sealed class TcpSslServer : IHostedService
         while (!_cancellationToken.IsCancellationRequested)
         {
             var clientSocket = await listener.AcceptAsync(_cancellationToken);
-            var task = Task.Run(() => HandleClientAsync(clientSocket, _cancellationToken), _cancellationToken);
-            _connectionTasks.Add(task);
+            var connectionId = Guid.NewGuid();
+            var connectionTask = HandleClientAsync(clientSocket, _cancellationToken);
+
+            _connectionTasks[connectionId] = connectionTask;
+
+            FireAndForget(connectionTask.ContinueWith(_ =>
+            {
+                _connectionTasks.TryRemove(connectionId, out _);
+                _logger.LogDebug($"Connection {connectionId} cleaned up.");
+            }, TaskContinuationOptions.OnlyOnRanToCompletion));
         }
     }
 
-    public Task StopAsync(CancellationToken cancellationToken)
+    public async Task StopAsync(CancellationToken cancellationToken)
     {
         _logger.LogInformation("Shutting down TCP server...");
         _cancellationToken = new CancellationToken(true);
-        return Task.CompletedTask;
+        await Task.WhenAll(_connectionTasks.Values);
+        _logger.LogInformation("All connections cleaned up.");
     }
 
     private async Task HandleClientAsync(Socket clientSocket, CancellationToken cancellationToken)
@@ -114,5 +123,16 @@ internal sealed class TcpSslServer : IHostedService
         }
 
         return (route, parameters, body);
+    }
+
+    private void FireAndForget(Task task)
+    {
+        task.ContinueWith(t =>
+        {
+            if (t.IsFaulted)
+            {
+                _logger.LogWarning($"Task failed: {t.Exception?.GetBaseException().Message}");
+            }
+        }, TaskContinuationOptions.OnlyOnFaulted);
     }
 }

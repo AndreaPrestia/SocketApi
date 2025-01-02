@@ -147,7 +147,7 @@ public class TcpSslServerTests
     /// <param name="maxMsAcceptableResponse">The maximum acceptable response time in ms</param>
     [Theory]
     [Trait("Category", "Performance")]
-    [InlineData(100, 0, 200)] // 100 clients, 0 ms min, 200 ms max response time
+    [InlineData(1000, 0, 200)] // 100 clients, 0 ms min, 200 ms max response time
     public async Task TestServerPerformanceUnderLoad(int clientCount, int minMsAcceptableResponse, int maxMsAcceptableResponse)
     {
         //Arrange
