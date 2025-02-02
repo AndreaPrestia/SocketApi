@@ -44,7 +44,7 @@ internal sealed class TcpSslServer : IHostedService
 
             FireAndForget(connectionTask.ContinueWith(_ =>
             {
-                _connectionTasks.TryRemove(connectionId, out _);
+                _connectionTasks.TryRemove(connectionId, out var _);
                 _logger.LogDebug($"Connection {connectionId} cleaned up.");
             }, TaskContinuationOptions.OnlyOnRanToCompletion));
         }
@@ -125,9 +125,9 @@ internal sealed class TcpSslServer : IHostedService
         return (route, parameters, body);
     }
 
-    private void FireAndForget(Task task)
+    private void FireAndForget(Task? task)
     {
-        task.ContinueWith(t =>
+        task?.ContinueWith(t =>
         {
             if (t.IsFaulted)
             {
