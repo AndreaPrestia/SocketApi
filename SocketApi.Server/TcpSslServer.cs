@@ -4,6 +4,7 @@ using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
+using System.Text;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -71,16 +72,16 @@ internal sealed class TcpSslServer : IHostedService
             var buffer = new byte[4096];
             var bytesRead = await sslStream.ReadAsync(buffer, cancellationToken);
 
-            var (route, parameters, body) = ParseCustomProtocol(buffer.Take(bytesRead).ToArray());
+            var (route, body) = ParseCustomProtocol(buffer.Take(bytesRead).ToArray());
             _logger.LogDebug("Route: {route}", route);
 
             async Task WriteResponse(string responseMessage)
             {
-                var responseBytes = System.Text.Encoding.UTF8.GetBytes(responseMessage);
+                var responseBytes = Encoding.UTF8.GetBytes(responseMessage);
                 await sslStream.WriteAsync(responseBytes, cancellationToken);
             }
 
-            await Router.RouteRequestAsync(route, parameters, body, WriteResponse);
+            await Router.RouteRequestAsync(route, body, WriteResponse);
         }
         catch (Exception ex)
         {
@@ -92,39 +93,16 @@ internal sealed class TcpSslServer : IHostedService
         }
     }
 
-    private (string route, Dictionary<string, string> parameters, string body) ParseCustomProtocol(
+    private (string operation, string request) ParseCustomProtocol(
         byte[] requestBytes)
     {
-        var requestText = System.Text.Encoding.UTF8.GetString(requestBytes);
-        var lines = requestText.Split(new[] { "\r\n" }, StringSplitOptions.None);
-
-        var route = lines[0];
-
-        var parameters = new Dictionary<string, string>();
-        var body = string.Empty;
-
-        var routeParts = route.Split('?');
-        route = routeParts[0];
-
-        if (routeParts.Length > 1)
-        {
-            var queryParams = routeParts[1].Split('&');
-            foreach (var param in queryParams)
-            {
-                var keyValue = param.Split('=');
-                if (keyValue.Length == 2)
-                    parameters[keyValue[0]] = keyValue[1];
-            }
-        }
-
-        for (var i = 1; i < lines.Length; i++)
-        {
-            body += lines[i];
-        }
-
-        return (route, parameters, body);
+        var requestText = Encoding.UTF8.GetString(requestBytes);
+        var content = requestText.Split("|");
+        var operation = content[0];
+        var body = content.Length > 1 ?  content[1] : string.Empty;
+        return (operation, body);
     }
-
+    
     private void FireAndForget(Task? task)
     {
         task?.ContinueWith(t =>

@@ -17,35 +17,34 @@ public class TcpSslServerTests
     {
         var host = Host.CreateDefaultBuilder().AddSocketApi(CertPath, CertPassword, Port, Backlog)
             .Build();
-        Router.RegisterRoute("/login", async (parameters, _, writeResponse) =>
+        Router.RegisterOperation("login", async (request, response) =>
         {
-            if (parameters.TryGetValue("username", out var username) &&
-                parameters.TryGetValue("password", out var _))
+            if (!string.IsNullOrWhiteSpace(request) && string.Equals("username:password", request))
             {
-                await writeResponse($"Logged in as {username}");
+                await response("Logged in!");
             }
             else
             {
-                await writeResponse("Missing credentials");
+                await response("Missing credentials");
             }
         });
 
-        Router.RegisterRoute("/submit", async (_, data, writeResponse) =>
+        Router.RegisterOperation("submit", async (request, response) =>
         {
-            if (!string.IsNullOrEmpty(data))
+            if (!string.IsNullOrEmpty(request))
             {
-                await writeResponse($"Data submitted: {data}");
+                await response($"Data submitted: {request}");
             }
             else
             {
-                await writeResponse("No data provided");
+                await response("No data provided");
             }
         });
 
-        Router.RegisterRoute("/performance", async (_, data, writeResponse) =>
+        Router.RegisterOperation("performance", async (request, response) =>
         {
             await Task.Delay(50); // Simulate processing delay
-            await writeResponse($"Performance test completed with data {data}");
+            await response($"Performance test completed with data {request}");
         });
 
         Task.Run(() => host.RunAsync());
@@ -55,8 +54,8 @@ public class TcpSslServerTests
     public async Task TestGetRoute_WithParameters_ReturnsExpectedResponse()
     {
         // Arrange
-        var request = "/login?username=TestUser&password=1234\r\n";
-        var expectedResponse = "Logged in as TestUser";
+        var request = "login|username:password";
+        var expectedResponse = "Logged in!";
 
         // Act
         var response = await SendRequestAndReceiveResponse(request);
@@ -69,7 +68,7 @@ public class TcpSslServerTests
     public async Task TestPostRoute_WithBody_ReturnsExpectedResponse()
     {
         // Arrange
-        var request = "/submit\r\nHello World";
+        var request = "submit|Hello World";
         var expectedResponse = "Data submitted: Hello World";
 
         // Act
@@ -83,7 +82,7 @@ public class TcpSslServerTests
     public async Task TestMissingCredentials_ReturnsErrorMessage()
     {
         // Arrange
-        var request = "/login\r\n";
+        var request = "login";
         var expectedResponse = "Missing credentials";
 
         // Act
@@ -107,7 +106,7 @@ public class TcpSslServerTests
         // Act
         for (var i = 0; i < concurrentClients; i++)
         {
-            const string request = "/login?username=concurrent&password=test\r\n";
+            const string request = "login|username:password";
             tasks.Add(SendRequestAndReceiveResponse(request));
         }
 
@@ -116,7 +115,7 @@ public class TcpSslServerTests
         // Assert
         foreach (var response in responses)
         {
-            Assert.Equal("Logged in as concurrent", response);
+            Assert.Equal("Logged in!", response);
         }
     }
 
@@ -155,7 +154,7 @@ public class TcpSslServerTests
 
         for (var i = 0; i < clientCount; i++)
         {
-            tasks.Add(MeasureResponseTimeAsync($"/performance\r\nClient Number: {i}"));
+            tasks.Add(MeasureResponseTimeAsync($"performance|Client Number: {i}"));
         }
 
         //Act
@@ -192,7 +191,7 @@ public class TcpSslServerTests
 
         stopwatch.Stop();
 
-        var response = Encoding.UTF8.GetString(buffer, 0, bytesRead).Trim();
+        var response = Encoding.UTF8.GetString(buffer, 0 , bytesRead).Trim();
 
         return new Tuple<string, long>(response, stopwatch.ElapsedMilliseconds);
     }

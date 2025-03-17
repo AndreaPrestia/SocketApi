@@ -2,22 +2,22 @@
 
 public static class Router
 {
-    private static readonly Dictionary<string, Func<Dictionary<string, string>, string, Func<string, Task>, Task>> Routes = new();
+    private static readonly Dictionary<string, Func<string, Func<string, Task>, Task>> Operations = new();
 
-    public static void RegisterRoute(string route, Func<Dictionary<string, string>, string, Func<string, Task>, Task> action)
+    public static void RegisterOperation(string operation, Func<string, Func<string, Task>, Task> action)
     {
-        Routes[route] = action;
+        Operations[operation] = action;
     }
 
-    public static async Task RouteRequestAsync(string route, Dictionary<string, string> parameters, string body, Func<string, Task> writeResponse)
+    public static async Task RouteRequestAsync(string operation, string request, Func<string, Task> response)
     {
-        if (Routes.TryGetValue(route, out var action))
+        if (Operations.TryGetValue(operation, out var action))
         {
-            await action(parameters, body, writeResponse);
+            await action(request, response);
         }
         else
         {
-           await writeResponse("Not Found");
+           await response("Not Found");
         }
     }
 }
