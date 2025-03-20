@@ -4,7 +4,7 @@ using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
-using System.Text;
+using MessagePack;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -75,13 +75,18 @@ internal sealed class TcpSslServer : IHostedService
             var (route, body) = ParseCustomProtocol(buffer.Take(bytesRead).ToArray());
             _logger.LogDebug("Route: {route}", route);
 
-            async Task WriteResponse(string responseMessage)
+            async Task WriteResponse(OperationResult responseMessage)
             {
-                var responseBytes = Encoding.UTF8.GetBytes(responseMessage);
+                var responseBytes = MessagePackSerializer.Serialize(responseMessage);
                 await sslStream.WriteAsync(responseBytes, cancellationToken);
             }
 
-            await Router.RouteRequestAsync(route, body, WriteResponse);
+            await Router.RouteRequestAsync(route, new OperationRequest()
+            {
+                Content = body,
+                Name = route,
+                Origin = clientSocket.RemoteEndPoint?.ToString()
+            }, WriteResponse);
         }
         catch (Exception ex)
         {
@@ -96,7 +101,7 @@ internal sealed class TcpSslServer : IHostedService
     private (string operation, string request) ParseCustomProtocol(
         byte[] requestBytes)
     {
-        var requestText = Encoding.UTF8.GetString(requestBytes);
+        var requestText = MessagePackSerializer.Deserialize<string>(requestBytes);
         var content = requestText.Split("|");
         var operation = content[0];
         var body = content.Length > 1 ?  content[1] : string.Empty;

@@ -1,7 +1,7 @@
 ﻿using System.Diagnostics;
 using System.Net.Security;
 using System.Net.Sockets;
-using System.Text;
+using MessagePack;
 using Microsoft.Extensions.Hosting;
 
 namespace SocketApi.Server.Tests;
@@ -19,32 +19,52 @@ public class TcpSslServerTests
             .Build();
         Router.RegisterOperation("login", async (request, response) =>
         {
-            if (!string.IsNullOrWhiteSpace(request) && string.Equals("username:password", request))
+            if (!string.IsNullOrWhiteSpace(request?.Content) && string.Equals("username:password", request.Content))
             {
-                await response("Logged in!");
+                await response(new OperationResult()
+                {
+                    Success = true,
+                    Content = "Logged in!"
+                });
             }
             else
             {
-                await response("Missing credentials");
+                await response(new OperationResult()
+                {
+                    Success = false,
+                    Content = "Missing credentials"
+                });
             }
         });
 
         Router.RegisterOperation("submit", async (request, response) =>
         {
-            if (!string.IsNullOrEmpty(request))
+            if (request != null)
             {
-                await response($"Data submitted: {request}");
+                await response(new OperationResult()
+                {
+                    Success = true,
+                    Content = $"Data submitted: {request.Content}"
+                });
             }
             else
             {
-                await response("No data provided");
+                await response(new OperationResult()
+                {
+                    Success = false,
+                    Content = "No data provided"
+                });
             }
         });
 
         Router.RegisterOperation("performance", async (request, response) =>
         {
             await Task.Delay(50); // Simulate processing delay
-            await response($"Performance test completed with data {request}");
+            await response(new OperationResult()
+            {
+                Success = true,
+                Content = $"Performance test completed with data {request?.Content}"
+            });
         });
 
         Task.Run(() => host.RunAsync());
@@ -61,7 +81,9 @@ public class TcpSslServerTests
         var response = await SendRequestAndReceiveResponse(request);
 
         // Assert
-        Assert.Equal(expectedResponse, response);
+        Assert.NotNull(response);
+        Assert.NotNull(response.Content);
+        Assert.Equal(expectedResponse, response.Content.ToString());
     }
 
     [Fact]
@@ -75,7 +97,9 @@ public class TcpSslServerTests
         var response = await SendRequestAndReceiveResponse(request);
 
         // Assert
-        Assert.Equal(expectedResponse, response);
+        Assert.NotNull(response);
+        Assert.NotNull(response.Content);
+        Assert.Equal(expectedResponse, response.Content.ToString());
     }
 
     [Fact]
@@ -89,7 +113,9 @@ public class TcpSslServerTests
         var response = await SendRequestAndReceiveResponse(request);
 
         // Assert
-        Assert.Equal(expectedResponse, response);
+        Assert.NotNull(response);
+        Assert.NotNull(response.Content);
+        Assert.Equal(expectedResponse, response.Content.ToString());
     }
 
     /// <summary>
@@ -101,7 +127,7 @@ public class TcpSslServerTests
     [InlineData(10)]
     public async Task TestConcurrentRequests_MultipleConnections_Success(int concurrentClients)
     {
-        var tasks = new List<Task<string>>();
+        var tasks = new List<Task<OperationResult>>();
 
         // Act
         for (var i = 0; i < concurrentClients; i++)
@@ -115,11 +141,13 @@ public class TcpSslServerTests
         // Assert
         foreach (var response in responses)
         {
-            Assert.Equal("Logged in!", response);
+            Assert.NotNull(response);
+            Assert.NotNull(response.Content);
+            Assert.Equal("Logged in!", response.Content.ToString());
         }
     }
 
-    private async Task<string> SendRequestAndReceiveResponse(string request)
+    private async Task<OperationResult> SendRequestAndReceiveResponse(string request)
     {
         using var client = new TcpClient();
         await client.ConnectAsync("127.0.0.1", Port);
@@ -129,13 +157,13 @@ public class TcpSslServerTests
 
         await sslStream.AuthenticateAsClientAsync("localhost");
 
-        var requestBytes = Encoding.UTF8.GetBytes(request);
+        var requestBytes = MessagePackSerializer.Serialize(request);
         await sslStream.WriteAsync(requestBytes);
 
         var buffer = new byte[4096];
-        var bytesRead = await sslStream.ReadAsync(buffer);
+        _ = await sslStream.ReadAsync(buffer);
 
-        return Encoding.UTF8.GetString(buffer, 0, bytesRead).Trim();
+        return MessagePackSerializer.Deserialize<OperationResult>(buffer);
     }
 
     /// <summary>
@@ -147,10 +175,11 @@ public class TcpSslServerTests
     [Theory]
     [Trait("Category", "Performance")]
     [InlineData(1000, 0, 200)] // 100 clients, 0 ms min, 200 ms max response time
-    public async Task TestServerPerformanceUnderLoad(int clientCount, int minMsAcceptableResponse, int maxMsAcceptableResponse)
+    public async Task TestServerPerformanceUnderLoad(int clientCount, int minMsAcceptableResponse,
+        int maxMsAcceptableResponse)
     {
         //Arrange
-        var tasks = new List<Task<Tuple<string, long>>>(); // To store response time tasks
+        var tasks = new List<Task<Tuple<OperationResult, long>>>(); // To store response time tasks
 
         for (var i = 0; i < clientCount; i++)
         {
@@ -165,13 +194,16 @@ public class TcpSslServerTests
         foreach (var response in responses)
         {
             var data = $"Client Number: {index}";
-            Assert.Equal($"Performance test completed with data {data}", response.Item1);
+            Assert.NotNull(response);
+            Assert.NotNull(response.Item1);
+            Assert.NotNull(response.Item1.Content);
+            Assert.Equal($"Performance test completed with data {data}", response.Item1.Content.ToString());
             Assert.InRange(response.Item2, minMsAcceptableResponse, maxMsAcceptableResponse);
             index++;
         }
     }
 
-    private async Task<Tuple<string, long>> MeasureResponseTimeAsync(string request)
+    private async Task<Tuple<OperationResult, long>> MeasureResponseTimeAsync(string request)
     {
         using var client = new TcpClient();
         await client.ConnectAsync("127.0.0.1", Port);
@@ -181,18 +213,18 @@ public class TcpSslServerTests
 
         await sslStream.AuthenticateAsClientAsync("localhost");
 
-        var requestBytes = Encoding.UTF8.GetBytes(request);
+        var requestBytes = MessagePackSerializer.Serialize(request);
         var stopwatch = Stopwatch.StartNew();
 
         await sslStream.WriteAsync(requestBytes);
 
         var buffer = new byte[4096];
-        var bytesRead = await sslStream.ReadAsync(buffer);
+        _ = await sslStream.ReadAsync(buffer);
 
         stopwatch.Stop();
 
-        var response = Encoding.UTF8.GetString(buffer, 0 , bytesRead).Trim();
+        var response = MessagePackSerializer.Deserialize<OperationResult>(buffer);
 
-        return new Tuple<string, long>(response, stopwatch.ElapsedMilliseconds);
+        return new Tuple<OperationResult, long>(response, stopwatch.ElapsedMilliseconds);
     }
 }
