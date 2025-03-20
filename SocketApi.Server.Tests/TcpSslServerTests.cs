@@ -17,54 +17,50 @@ public class TcpSslServerTests
     {
         var host = Host.CreateDefaultBuilder().AddSocketApi(CertPath, CertPassword, Port, Backlog)
             .Build();
-        Router.RegisterOperation("login", async (request, response) =>
+        Router.RegisterOperation("login", request =>
         {
             if (!string.IsNullOrWhiteSpace(request?.Content) && string.Equals("username:password", request.Content))
             {
-                await response(new OperationResult()
+                return Task.FromResult(new OperationResult()
                 {
                     Success = true,
                     Content = "Logged in!"
                 });
             }
-            else
+
+            return Task.FromResult(new OperationResult()
             {
-                await response(new OperationResult()
-                {
-                    Success = false,
-                    Content = "Missing credentials"
-                });
-            }
+                Success = false,
+                Content = "Missing credentials"
+            });
         });
 
-        Router.RegisterOperation("submit", async (request, response) =>
+        Router.RegisterOperation("submit", request =>
         {
             if (request != null)
             {
-                await response(new OperationResult()
+                return Task.FromResult(new OperationResult()
                 {
                     Success = true,
                     Content = $"Data submitted: {request.Content}"
                 });
             }
-            else
+
+            return Task.FromResult(new OperationResult()
             {
-                await response(new OperationResult()
-                {
-                    Success = false,
-                    Content = "No data provided"
-                });
-            }
+                Success = false,
+                Content = "No data provided"
+            });
         });
 
-        Router.RegisterOperation("performance", async (request, response) =>
+        Router.RegisterOperation("performance", async request =>
         {
             await Task.Delay(50); // Simulate processing delay
-            await response(new OperationResult()
+            return new OperationResult()
             {
                 Success = true,
                 Content = $"Performance test completed with data {request?.Content}"
-            });
+            };
         });
 
         Task.Run(() => host.RunAsync());

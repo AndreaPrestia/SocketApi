@@ -2,29 +2,27 @@
 
 public static class Router
 {
-    private static readonly Dictionary<string, Func<OperationRequest?, Func<OperationResult, Task>, Task>> Operations = new();
+    private static readonly Dictionary<string, Func<OperationRequest?, Task<OperationResult>>> Operations = new();
 
-    public static void RegisterOperation(string operation, Func<OperationRequest?, Func<OperationResult, Task>, Task> action)
+    public static void RegisterOperation(string operation, Func<OperationRequest?, Task<OperationResult>> action)
     {
         Operations[operation] = action;
     }
 
-    public static async Task RouteRequestAsync(string operation, OperationRequest request, Func<OperationResult, Task> response)
+    public static async Task<OperationResult> RouteRequestAsync(string operation, OperationRequest request)
     {
         if (Operations.TryGetValue(operation, out var action))
         {
             try
             {
-                await action(request, response);
+                return await action(request);
             }
             catch (Exception ex)
             {
-                await response(new OperationResult() { Success = false, Content = ex.Message });
+                return new OperationResult { Success = false, Content = ex.Message };
             }
         }
-        else
-        {
-            await response(new OperationResult() { Success = false, Content = $"Operation {operation} not found." });
-        }
+
+        return new OperationResult { Success = false, Content = $"Operation {operation} not found." };
     }
 }
