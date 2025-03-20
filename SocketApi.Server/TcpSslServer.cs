@@ -75,12 +75,7 @@ internal sealed class TcpSslServer : IHostedService
             var (route, body) = ParseCustomProtocol(buffer.Take(bytesRead).ToArray());
             _logger.LogDebug("Route: {route}", route);
 
-            OperationResult result = await Router.RouteRequestAsync(route, new OperationRequest()
-            {
-                Content = body,
-                Name = route,
-                Origin = clientSocket.RemoteEndPoint?.ToString()
-            });
+            var result = await Router.RouteRequestAsync(route, OperationRequest.From(route, clientSocket.RemoteEndPoint?.ToString(), body));
             
             var responseBytes = MessagePackSerializer.Serialize(result);
             await sslStream.WriteAsync(responseBytes, cancellationToken);

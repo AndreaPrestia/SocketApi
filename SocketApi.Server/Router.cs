@@ -19,10 +19,10 @@ public static class Router
             }
             catch (Exception ex)
             {
-                return new OperationResult { Success = false, Content = ex.Message };
+                return OperationResult.Ko(ex);
             }
         }
 
-        return new OperationResult { Success = false, Content = $"Operation {operation} not found." };
+        return OperationResult.Ko($"Operation {operation} not found.");
     }
 }

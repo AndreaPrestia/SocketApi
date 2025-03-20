@@ -21,46 +21,26 @@ public class TcpSslServerTests
         {
             if (!string.IsNullOrWhiteSpace(request?.Content) && string.Equals("username:password", request.Content))
             {
-                return Task.FromResult(new OperationResult()
-                {
-                    Success = true,
-                    Content = "Logged in!"
-                });
+                return Task.FromResult(OperationResult.Ok("Logged in!"));
             }
 
-            return Task.FromResult(new OperationResult()
-            {
-                Success = false,
-                Content = "Missing credentials"
-            });
+            return Task.FromResult(OperationResult.Ko("Missing credentials"));
         });
 
         Router.RegisterOperation("submit", request =>
         {
             if (request != null)
             {
-                return Task.FromResult(new OperationResult()
-                {
-                    Success = true,
-                    Content = $"Data submitted: {request.Content}"
-                });
+                return Task.FromResult(OperationResult.Ok($"Data submitted: {request.Content}"));
             }
 
-            return Task.FromResult(new OperationResult()
-            {
-                Success = false,
-                Content = "No data provided"
-            });
+            return Task.FromResult(OperationResult.Ko("No data provided"));
         });
 
         Router.RegisterOperation("performance", async request =>
         {
             await Task.Delay(50); // Simulate processing delay
-            return new OperationResult()
-            {
-                Success = true,
-                Content = $"Performance test completed with data {request?.Content}"
-            };
+            return OperationResult.Ok($"Performance test completed with data {request?.Content}");
         });
 
         Task.Run(() => host.RunAsync());
