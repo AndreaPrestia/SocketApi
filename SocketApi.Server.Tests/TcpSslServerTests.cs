@@ -17,7 +17,7 @@ public class TcpSslServerTests
     {
         var host = Host.CreateDefaultBuilder().AddSocketApi(CertPath, CertPassword, Port, Backlog)
             .Build();
-        Router.RegisterOperation("login", request =>
+        Router.Operation("login", request =>
         {
             if (!string.IsNullOrWhiteSpace(request?.Content) && string.Equals("username:password", request.Content))
             {
@@ -27,7 +27,7 @@ public class TcpSslServerTests
             return Task.FromResult(OperationResult.Ko("Missing credentials"));
         });
 
-        Router.RegisterOperation("submit", request =>
+        Router.Operation("submit", request =>
         {
             if (request != null)
             {
@@ -37,7 +37,7 @@ public class TcpSslServerTests
             return Task.FromResult(OperationResult.Ko("No data provided"));
         });
 
-        Router.RegisterOperation("performance", async request =>
+        Router.Operation("performance", async request =>
         {
             await Task.Delay(50); // Simulate processing delay
             return OperationResult.Ok($"Performance test completed with data {request?.Content}");

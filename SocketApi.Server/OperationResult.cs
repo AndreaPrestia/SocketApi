@@ -6,7 +6,7 @@ namespace SocketApi.Server;
 public class OperationResult
 {
     [Key(0)] public bool Success { get; }
-    [Key(2)] public object? Content { get; }
+    [Key(1)] public object? Content { get; }
 
     internal OperationResult(bool success, object? content)
     {
