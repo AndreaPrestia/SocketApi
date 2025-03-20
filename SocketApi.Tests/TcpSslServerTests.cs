@@ -1,10 +1,11 @@
 ﻿using System.Diagnostics;
 using System.Net.Security;
 using System.Net.Sockets;
+using System.Security.Cryptography.X509Certificates;
 using MessagePack;
 using Microsoft.Extensions.Hosting;
 
-namespace SocketApi.Server.Tests;
+namespace SocketApi.Tests;
 
 public class TcpSslServerTests
 {
@@ -15,7 +16,7 @@ public class TcpSslServerTests
 
     public TcpSslServerTests()
     {
-        var host = Host.CreateDefaultBuilder().AddSocketApi(CertPath, CertPassword, Port, Backlog)
+        var host = Host.CreateDefaultBuilder().AddSocketApi(Port, new X509Certificate2(CertPath, CertPassword), Backlog)
             .Build();
         Router.Operation("login", request =>
         {

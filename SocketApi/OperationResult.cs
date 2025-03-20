@@ -1,6 +1,6 @@
 ﻿using MessagePack;
 
-namespace SocketApi.Server;
+namespace SocketApi;
 
 [MessagePackObject(AllowPrivate = true)]
 public class OperationResult

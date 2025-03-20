@@ -1,8 +1,8 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SocketApi.Server", "SocketApi.Server\SocketApi.Server.csproj", "{23E8A459-532D-49F3-A4B0-AF5DE569CAC6}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SocketApi", "SocketApi\SocketApi.csproj", "{23E8A459-532D-49F3-A4B0-AF5DE569CAC6}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SocketApi.Server.Tests", "SocketApi.Server.Tests\SocketApi.Server.Tests.csproj", "{ADD36324-384E-4B4B-9668-D0F07E7371AC}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SocketApi.Tests", "SocketApi.Tests\SocketApi.Tests.csproj", "{ADD36324-384E-4B4B-9668-D0F07E7371AC}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

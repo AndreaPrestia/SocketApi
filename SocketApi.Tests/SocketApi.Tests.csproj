@@ -23,7 +23,7 @@
     </ItemGroup>
 
     <ItemGroup>
-      <ProjectReference Include="..\SocketApi.Server\SocketApi.Server.csproj" />
+      <ProjectReference Include="..\SocketApi\SocketApi.csproj" />
     </ItemGroup>
 
     <ItemGroup>

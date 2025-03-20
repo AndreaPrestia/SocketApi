@@ -8,7 +8,7 @@ using MessagePack;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
-namespace SocketApi.Server;
+namespace SocketApi;
 
 internal sealed class TcpSslServer : IHostedService
 {
@@ -19,11 +19,11 @@ internal sealed class TcpSslServer : IHostedService
     private readonly ILogger<TcpSslServer> _logger;
     private CancellationToken _cancellationToken;
 
-    internal TcpSslServer(int port, string certPath, string certPassword, int backlog, ILogger<TcpSslServer> logger)
+    internal TcpSslServer(int port, X509Certificate2 certificate, int backlog, ILogger<TcpSslServer> logger)
     {
         _port = port;
         _logger = logger;
-        _certificate = new X509Certificate2(certPath, certPassword);
+        _certificate = certificate;
         _backlog = backlog;
     }
 

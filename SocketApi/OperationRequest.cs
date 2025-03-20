@@ -1,4 +1,4 @@
-﻿namespace SocketApi.Server;
+﻿namespace SocketApi;
 
 public class OperationRequest
 {
