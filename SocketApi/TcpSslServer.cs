@@ -7,6 +7,7 @@ using System.Security.Cryptography.X509Certificates;
 using MessagePack;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using NetworkStream = System.Net.Sockets.NetworkStream;
 
 namespace SocketApi;
 
@@ -66,6 +67,7 @@ internal sealed class TcpSslServer : IHostedService
 
     private async Task HandleClientAsync(Socket clientSocket, CancellationToken cancellationToken)
     {
+        var responseBytes = new byte[_maxResponseLength];
         await using var networkStream = new NetworkStream(clientSocket, ownsSocket: true);
         await using var sslStream = new SslStream(networkStream, false);
 
@@ -79,11 +81,8 @@ internal sealed class TcpSslServer : IHostedService
 
             if (sslStream.CanRead && networkStream.DataAvailable)
             {
-                var maxLengthOperationResult =
-                    OperationResult.Ko($"Max request length ({_maxResponseLength}) exceeded.");
-                await sslStream.WriteAsync(
-                    MessagePackSerializer.Serialize(maxLengthOperationResult, cancellationToken: cancellationToken),
-                    cancellationToken);
+                responseBytes =
+                    MessagePackSerializer.Serialize(OperationResult.Ko($"Max request length ({_maxResponseLength}) exceeded."), cancellationToken: cancellationToken);
             }
             else
             {
@@ -94,31 +93,24 @@ internal sealed class TcpSslServer : IHostedService
                 var result = await Router.RouteRequestAsync(route,
                     OperationRequest.From(route, clientSocket.RemoteEndPoint?.ToString(), body));
 
-                var responseBytes = MessagePackSerializer.Serialize(result, cancellationToken: cancellationToken);
+                responseBytes = MessagePackSerializer.Serialize(result, cancellationToken: cancellationToken);
 
                 if (responseBytes.Length > _maxResponseLength)
                 {
-                    var maxLengthOperationResult =
-                        OperationResult.Ko($"Max response length ({_maxResponseLength}) exceeded.");
-                    await sslStream.WriteAsync(
-                        MessagePackSerializer.Serialize(maxLengthOperationResult, cancellationToken: cancellationToken),
-                        cancellationToken);
-                }
-                else
-                {
-                    await sslStream.WriteAsync(responseBytes, cancellationToken);
+                    responseBytes =
+                        MessagePackSerializer.Serialize(OperationResult.Ko($"Max response length ({_maxResponseLength}) exceeded."), cancellationToken: cancellationToken);
                 }
             }
         }
         catch (Exception ex)
         {
             _logger.LogError("Error: {error}", ex.Message);
-            var koResult = OperationResult.Ko(ex.Message);
-            await sslStream.WriteAsync(MessagePackSerializer.Serialize(koResult, cancellationToken: cancellationToken),
-                cancellationToken);
+            responseBytes = MessagePackSerializer.Serialize(OperationResult.Ko(ex.Message), cancellationToken: cancellationToken);
         }
         finally
         {
+            await sslStream.WriteAsync(responseBytes,
+                cancellationToken);
             await sslStream.FlushAsync(cancellationToken);
             clientSocket.Dispose();
         }
