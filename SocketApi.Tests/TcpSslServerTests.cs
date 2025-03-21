@@ -2,8 +2,10 @@
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Cryptography.X509Certificates;
+using System.Text;
 using MessagePack;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Primitives;
 
 namespace SocketApi.Tests;
 
@@ -13,10 +15,13 @@ public class TcpSslServerTests
     private const string CertPath = "Output.pfx";
     private const string CertPassword = "Password.1";
     private const int Backlog = 110;
+    private const long MaxRequestLength = 1024 * 1024;
+    private const long MaxResponseLength = 1024 * 1024;
 
     public TcpSslServerTests()
     {
-        var host = Host.CreateDefaultBuilder().AddSocketApi(Port, new X509Certificate2(CertPath, CertPassword), Backlog)
+        var host = Host.CreateDefaultBuilder().AddSocketApi(Port, new X509Certificate2(CertPath, CertPassword),
+                MaxRequestLength, MaxResponseLength, Backlog)
             .Build();
         Router.Operation("login", request =>
         {
@@ -43,6 +48,20 @@ public class TcpSslServerTests
             await Task.Delay(50); // Simulate processing delay
             return OperationResult.Ok($"Performance test completed with data {request?.Content}");
         });
+        
+        Router.Operation("max-response-length", _ =>
+        {
+            var sb = new StringBuilder();
+
+            const char character = 'A';
+            
+            for (var i = 0; i < MaxResponseLength; i++)
+            {
+                sb.Append(character);
+            }
+
+            return Task.FromResult(OperationResult.Ok(sb.ToString()));
+        });
 
         Task.Run(() => host.RunAsync());
     }
@@ -59,12 +78,13 @@ public class TcpSslServerTests
 
         // Assert
         Assert.NotNull(response);
+        Assert.True(response.Success);
         Assert.NotNull(response.Content);
         Assert.Equal(expectedResponse, response.Content.ToString());
     }
 
     [Fact]
-    public async Task TestPostRoute_WithBody_ReturnsExpectedResponse()
+    public async Task TestRoute_WithRequest_ReturnsExpectedResponse()
     {
         // Arrange
         var request = "submit|Hello World";
@@ -75,6 +95,7 @@ public class TcpSslServerTests
 
         // Assert
         Assert.NotNull(response);
+        Assert.True(response.Success);
         Assert.NotNull(response.Content);
         Assert.Equal(expectedResponse, response.Content.ToString());
     }
@@ -91,6 +112,86 @@ public class TcpSslServerTests
 
         // Assert
         Assert.NotNull(response);
+        Assert.False(response.Success);
+        Assert.NotNull(response.Content);
+        Assert.Equal(expectedResponse, response.Content.ToString());
+    }
+    
+    [Fact]
+    public async Task TestMaxRequestLength_ReturnsErrorMessage()
+    {
+        // Arrange
+        var sb = new StringBuilder();
+        const char character = 'A';
+        for (var i = 0; i < MaxRequestLength; i++)
+        {
+            sb.Append(character);
+        }
+        sb.Append('b');
+        
+        var expectedResponse = $"Max request length ({MaxRequestLength}) exceeded.";
+
+        // Act
+        var response = await SendRequestAndReceiveResponse(sb.ToString());
+
+        // Assert
+        Assert.NotNull(response);
+        Assert.False(response.Success);
+        Assert.NotNull(response.Content);
+        Assert.Equal(expectedResponse, response.Content.ToString());
+    }
+    
+    [Fact]
+    public async Task TestInvalid_Request_ReturnsErrorMessage()
+    {
+        // Arrange
+        var sb = new StringBuilder();
+        const char character = 'A';
+        for (var i = 0; i < MaxRequestLength - 300; i++)
+        {
+            sb.Append(character);
+        }
+        sb.Append('b');
+        
+        // Act
+        var response = await SendRequestAndReceiveResponse(sb.ToString());
+
+        // Assert
+        Assert.NotNull(response);
+        Assert.False(response.Success);
+        Assert.NotNull(response.Content);
+    }
+    
+    [Fact]
+    public async Task TestMaxResponseLength_ReturnsErrorMessage()
+    {
+        // Arrange
+        var request = "max-response-length";
+        var expectedResponse = $"Max response length ({MaxResponseLength}) exceeded.";
+
+        // Act
+        var response = await SendRequestAndReceiveResponse(request);
+
+        // Assert
+        Assert.NotNull(response);
+        Assert.False(response.Success);
+        Assert.NotNull(response.Content);
+        Assert.Equal(expectedResponse, response.Content.ToString());
+    }
+    
+    [Fact]
+    public async Task Test_RequestNotFound_ReturnsErrorMessage()
+    {
+        // Arrange
+        var request = "unknown";
+        var expectedResponse = $"Operation '{request}' not found.";
+
+        // Act
+        var response = await SendRequestAndReceiveResponse(request);
+
+        // Assert
+        Assert.NotNull(response);
+        Assert.False(response.Success);
         Assert.NotNull(response.Content);
         Assert.Equal(expectedResponse, response.Content.ToString());
     }
@@ -119,6 +220,7 @@ public class TcpSslServerTests
         foreach (var response in responses)
         {
             Assert.NotNull(response);
+            Assert.True(response.Success);
             Assert.NotNull(response.Content);
             Assert.Equal("Logged in!", response.Content.ToString());
         }

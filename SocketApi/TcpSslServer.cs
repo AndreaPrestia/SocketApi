@@ -14,16 +14,21 @@ internal sealed class TcpSslServer : IHostedService
 {
     private readonly int _port;
     private readonly int _backlog;
+    private readonly long _maxRequestLength;
+    private readonly long _maxResponseLength;
     private readonly X509Certificate2 _certificate;
     private readonly ConcurrentDictionary<Guid, Task> _connectionTasks = new();
     private readonly ILogger<TcpSslServer> _logger;
     private CancellationToken _cancellationToken;
 
-    internal TcpSslServer(int port, X509Certificate2 certificate, int backlog, ILogger<TcpSslServer> logger)
+    internal TcpSslServer(int port, X509Certificate2 certificate, int backlog, long maxRequestLength,
+        long maxResponseLength, ILogger<TcpSslServer> logger)
     {
         _port = port;
         _logger = logger;
         _certificate = certificate;
+        _maxRequestLength = maxRequestLength;
+        _maxResponseLength = maxResponseLength;
         _backlog = backlog;
     }
 
@@ -69,24 +74,52 @@ internal sealed class TcpSslServer : IHostedService
             await sslStream.AuthenticateAsServerAsync(_certificate, clientCertificateRequired: false,
                 SslProtocols.Tls12, checkCertificateRevocation: true);
 
-            var buffer = new byte[4096];
+            var buffer = new byte[_maxRequestLength];
             var bytesRead = await sslStream.ReadAsync(buffer, cancellationToken);
 
-            var (route, body) = ParseCustomProtocol(buffer.Take(bytesRead).ToArray());
-            _logger.LogDebug("Route: {route}", route);
+            if (sslStream.CanRead && networkStream.DataAvailable)
+            {
+                var maxLengthOperationResult =
+                    OperationResult.Ko($"Max request length ({_maxResponseLength}) exceeded.");
+                await sslStream.WriteAsync(
+                    MessagePackSerializer.Serialize(maxLengthOperationResult, cancellationToken: cancellationToken),
+                    cancellationToken);
+            }
+            else
+            {
+                
+                var (route, body) = ParseCustomProtocol(buffer.Take(bytesRead).ToArray());
+                _logger.LogDebug("Route: {route}", route);
 
-            var result = await Router.RouteRequestAsync(route, OperationRequest.From(route, clientSocket.RemoteEndPoint?.ToString(), body));
-            
-            var responseBytes = MessagePackSerializer.Serialize(result);
-            await sslStream.WriteAsync(responseBytes, cancellationToken);
-            await sslStream.FlushAsync(cancellationToken);
+                var result = await Router.RouteRequestAsync(route,
+                    OperationRequest.From(route, clientSocket.RemoteEndPoint?.ToString(), body));
+
+                var responseBytes = MessagePackSerializer.Serialize(result, cancellationToken: cancellationToken);
+
+                if (responseBytes.Length > _maxResponseLength)
+                {
+                    var maxLengthOperationResult =
+                        OperationResult.Ko($"Max response length ({_maxResponseLength}) exceeded.");
+                    await sslStream.WriteAsync(
+                        MessagePackSerializer.Serialize(maxLengthOperationResult, cancellationToken: cancellationToken),
+                        cancellationToken);
+                }
+                else
+                {
+                    await sslStream.WriteAsync(responseBytes, cancellationToken);
+                }
+            }
         }
         catch (Exception ex)
         {
             _logger.LogError("Error: {error}", ex.Message);
+            var koResult = OperationResult.Ko(ex.Message);
+            await sslStream.WriteAsync(MessagePackSerializer.Serialize(koResult, cancellationToken: cancellationToken),
+                cancellationToken);
         }
         finally
         {
+            await sslStream.FlushAsync(cancellationToken);
             clientSocket.Dispose();
         }
     }
@@ -97,10 +130,10 @@ internal sealed class TcpSslServer : IHostedService
         var requestText = MessagePackSerializer.Deserialize<string>(requestBytes);
         var content = requestText.Split("|");
         var operation = content[0];
-        var body = content.Length > 1 ?  content[1] : string.Empty;
+        var body = content.Length > 1 ? content[1] : string.Empty;
         return (operation, body);
     }
-    
+
     private void FireAndForget(Task? task)
     {
         task?.ContinueWith(t =>

@@ -41,7 +41,7 @@ var builder = Host.CreateDefaultBuilder(args)
         logging.AddConsole();
         logging.SetMinimumLevel(LogLevel.Debug);
     })
-    .AddSocketApi(443, new X5092Certificate("certPath", "certPassword"), 100);
+    .AddSocketApi(443, new X5092Certificate("certPath", "certPassword"), 1024 * 1024 * 1024, 1024 * 1024 * 1024, 100);
 
 var host = builder.Build();
 
@@ -52,11 +52,13 @@ The example above initialize the **SocketApi** server in a console application, 
 
 The parameters of the method are:
 
-| Parameter   | Type             | Context                                                      |
-|-------------|------------------|--------------------------------------------------------------|
-| port        | int              | The port where the application should listen.                |
-| certificate | X5092Certificate | It's the certificate to use.                                 |
-| backlog     | int           | The maximum length of the connections queue. Default at 100. |
+| Parameter         | Type             | Context                                                      |
+|-------------------|------------------|--------------------------------------------------------------|
+| port              | int              | The port where the application should listen.                |
+| certificate       | X5092Certificate | It's the certificate to use.                                 |
+| maxRequestLength  | long             | The maximum length of the request. Default at 1024 * 1024.  |
+| maxResponseLength | long             | The maximum length of the response. Default at 1024 * 1024. |
+| backlog           | int              | The maximum length of the connections queue. Default at 100. |
 
 **Expose an operation**
 

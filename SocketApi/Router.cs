@@ -23,6 +23,6 @@ public static class Router
             }
         }
 
-        return OperationResult.Ko($"Operation {operation} not found.");
+        return OperationResult.Ko($"Operation '{operation}' not found.");
     }
 }
