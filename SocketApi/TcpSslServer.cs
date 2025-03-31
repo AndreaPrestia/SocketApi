@@ -86,9 +86,7 @@ internal sealed class TcpSslServer : IHostedService
             }
             else
             {
-                
                 var (route, body) = ParseCustomProtocol(buffer.Take(bytesRead).ToArray());
-                _logger.LogDebug("Route: {route}", route);
 
                 var result = await Router.RouteRequestAsync(route,
                     OperationRequest.From(route, clientSocket.RemoteEndPoint?.ToString(), body));

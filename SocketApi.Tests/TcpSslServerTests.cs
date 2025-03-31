@@ -5,7 +5,6 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using MessagePack;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Primitives;
 
 namespace SocketApi.Tests;
 
@@ -23,25 +22,10 @@ public class TcpSslServerTests
         var host = Host.CreateDefaultBuilder().AddSocketApi(Port, new X509Certificate2(CertPath, CertPassword),
                 MaxRequestLength, MaxResponseLength, Backlog)
             .Build();
-        Router.Operation("login", request =>
-        {
-            if (!string.IsNullOrWhiteSpace(request?.Content) && string.Equals("username:password", request.Content))
-            {
-                return Task.FromResult(OperationResult.Ok("Logged in!"));
-            }
+        
+        Router.Operation("login", request => !string.IsNullOrWhiteSpace(request?.Content) && string.Equals("username:password", request.Content) ? Task.FromResult(OperationResult.Ok("Logged in!")) : Task.FromResult(OperationResult.Ko("Missing credentials")));
 
-            return Task.FromResult(OperationResult.Ko("Missing credentials"));
-        });
-
-        Router.Operation("submit", request =>
-        {
-            if (request != null)
-            {
-                return Task.FromResult(OperationResult.Ok($"Data submitted: {request.Content}"));
-            }
-
-            return Task.FromResult(OperationResult.Ko("No data provided"));
-        });
+        Router.Operation("submit", request => Task.FromResult(request != null ? OperationResult.Ok($"Data submitted: {request.Content}") : OperationResult.Ko("No data provided")));
 
         Router.Operation("performance", async request =>
         {
