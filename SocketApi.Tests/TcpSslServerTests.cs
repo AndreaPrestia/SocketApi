@@ -23,14 +23,14 @@ public class TcpSslServerTests
                 MaxRequestLength, MaxResponseLength, Backlog)
             .Build();
         
-        Router.Operation("login", request => !string.IsNullOrWhiteSpace(request?.Content) && string.Equals("username:password", request.Content) ? Task.FromResult(OperationResult.Ok("Logged in!")) : Task.FromResult(OperationResult.Ko("Missing credentials")));
+        Router.Operation("login", request => !string.IsNullOrWhiteSpace(request?.Payload) && string.Equals("username:password", request.Payload) ? Task.FromResult(OperationResult.Ok("Logged in!")) : Task.FromResult(OperationResult.Ko("Missing credentials")));
 
-        Router.Operation("submit", request => Task.FromResult(request != null ? OperationResult.Ok($"Data submitted: {request.Content}") : OperationResult.Ko("No data provided")));
+        Router.Operation("submit", request => Task.FromResult(request != null ? OperationResult.Ok($"Data submitted: {request.Payload}") : OperationResult.Ko("No data provided")));
 
         Router.Operation("performance", async request =>
         {
             await Task.Delay(50); // Simulate processing delay
-            return OperationResult.Ok($"Performance test completed with data {request?.Content}");
+            return OperationResult.Ok($"Performance test completed with data {request?.Payload}");
         });
         
         Router.Operation("max-response-length", _ =>
@@ -48,13 +48,32 @@ public class TcpSslServerTests
         });
 
         Task.Run(() => host.RunAsync());
+        WaitForServerReady().GetAwaiter().GetResult();
+    }
+
+    private static async Task WaitForServerReady()
+    {
+        for (var i = 0; i < 50; i++)
+        {
+            try
+            {
+                using var client = new TcpClient();
+                await client.ConnectAsync("127.0.0.1", Port);
+                return;
+            }
+            catch
+            {
+                await Task.Delay(100);
+            }
+        }
+        throw new TimeoutException("Server did not start in time.");
     }
 
     [Fact]
     public async Task TestGetRoute_WithParameters_ReturnsExpectedResponse()
     {
         // Arrange
-        var request = "login|username:password";
+        var request = "Call|login|username:password";
         var expectedResponse = "Logged in!";
 
         // Act
@@ -63,15 +82,15 @@ public class TcpSslServerTests
         // Assert
         Assert.NotNull(response);
         Assert.True(response.Success);
-        Assert.NotNull(response.Content);
-        Assert.Equal(expectedResponse, response.Content.ToString());
+        Assert.NotNull(response.Payload);
+        Assert.Equal(expectedResponse, response.Payload.ToString());
     }
 
     [Fact]
     public async Task TestRoute_WithRequest_ReturnsExpectedResponse()
     {
         // Arrange
-        var request = "submit|Hello World";
+        var request = "Call|submit|Hello World";
         var expectedResponse = "Data submitted: Hello World";
 
         // Act
@@ -80,15 +99,15 @@ public class TcpSslServerTests
         // Assert
         Assert.NotNull(response);
         Assert.True(response.Success);
-        Assert.NotNull(response.Content);
-        Assert.Equal(expectedResponse, response.Content.ToString());
+        Assert.NotNull(response.Payload);
+        Assert.Equal(expectedResponse, response.Payload.ToString());
     }
 
     [Fact]
     public async Task TestMissingCredentials_ReturnsErrorMessage()
     {
         // Arrange
-        var request = "login";
+        var request = "Call|login|";
         var expectedResponse = "Missing credentials";
 
         // Act
@@ -97,8 +116,8 @@ public class TcpSslServerTests
         // Assert
         Assert.NotNull(response);
         Assert.False(response.Success);
-        Assert.NotNull(response.Content);
-        Assert.Equal(expectedResponse, response.Content.ToString());
+        Assert.NotNull(response.Payload);
+        Assert.Equal(expectedResponse, response.Payload.ToString());
     }
     
     [Fact]
@@ -121,8 +140,8 @@ public class TcpSslServerTests
         // Assert
         Assert.NotNull(response);
         Assert.False(response.Success);
-        Assert.NotNull(response.Content);
-        Assert.Equal(expectedResponse, response.Content.ToString());
+        Assert.NotNull(response.Payload);
+        Assert.Equal(expectedResponse, response.Payload.ToString());
     }
     
     [Fact]
@@ -143,14 +162,14 @@ public class TcpSslServerTests
         // Assert
         Assert.NotNull(response);
         Assert.False(response.Success);
-        Assert.NotNull(response.Content);
+        Assert.NotNull(response.Payload);
     }
     
     [Fact]
     public async Task TestMaxResponseLength_ReturnsErrorMessage()
     {
         // Arrange
-        var request = "max-response-length";
+        var request = "Call|max-response-length|";
         var expectedResponse = $"Max response length ({MaxResponseLength}) exceeded.";
 
         // Act
@@ -159,16 +178,16 @@ public class TcpSslServerTests
         // Assert
         Assert.NotNull(response);
         Assert.False(response.Success);
-        Assert.NotNull(response.Content);
-        Assert.Equal(expectedResponse, response.Content.ToString());
+        Assert.NotNull(response.Payload);
+        Assert.Equal(expectedResponse, response.Payload.ToString());
     }
     
     [Fact]
     public async Task Test_RequestNotFound_ReturnsErrorMessage()
     {
         // Arrange
-        var request = "unknown";
-        var expectedResponse = $"Operation '{request}' not found.";
+        var request = "Call|unknown|";
+        var expectedResponse = "Target 'unknown' not found.";
 
         // Act
         var response = await SendRequestAndReceiveResponse(request);
@@ -176,8 +195,8 @@ public class TcpSslServerTests
         // Assert
         Assert.NotNull(response);
         Assert.False(response.Success);
-        Assert.NotNull(response.Content);
-        Assert.Equal(expectedResponse, response.Content.ToString());
+        Assert.NotNull(response.Payload);
+        Assert.Equal(expectedResponse, response.Payload.ToString());
     }
 
     /// <summary>
@@ -194,7 +213,7 @@ public class TcpSslServerTests
         // Act
         for (var i = 0; i < concurrentClients; i++)
         {
-            const string request = "login|username:password";
+            const string request = "Call|login|username:password";
             tasks.Add(SendRequestAndReceiveResponse(request));
         }
 
@@ -205,8 +224,8 @@ public class TcpSslServerTests
         {
             Assert.NotNull(response);
             Assert.True(response.Success);
-            Assert.NotNull(response.Content);
-            Assert.Equal("Logged in!", response.Content.ToString());
+            Assert.NotNull(response.Payload);
+            Assert.Equal("Logged in!", response.Payload.ToString());
         }
     }
 
@@ -246,7 +265,7 @@ public class TcpSslServerTests
 
         for (var i = 0; i < clientCount; i++)
         {
-            tasks.Add(MeasureResponseTimeAsync($"performance|Client Number: {i}"));
+            tasks.Add(MeasureResponseTimeAsync($"Call|performance|Client Number: {i}"));
         }
 
         //Act
@@ -259,8 +278,8 @@ public class TcpSslServerTests
             var data = $"Client Number: {index}";
             Assert.NotNull(response);
             Assert.NotNull(response.Item1);
-            Assert.NotNull(response.Item1.Content);
-            Assert.Equal($"Performance test completed with data {data}", response.Item1.Content.ToString());
+            Assert.NotNull(response.Item1.Payload);
+            Assert.Equal($"Performance test completed with data {data}", response.Item1.Payload.ToString());
             Assert.InRange(response.Item2, minMsAcceptableResponse, maxMsAcceptableResponse);
             index++;
         }

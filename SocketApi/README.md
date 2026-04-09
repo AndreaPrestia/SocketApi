@@ -20,10 +20,10 @@ The **SocketApi** project contains the logic for communication on a simple binar
 It is very simple and runs on top of TCP over SSL.
 
 ```
-operation|this is the payload to sent
+operation|target|payload
 ```
 
-It is pipe (**|**) separated and is composed of **operation** and eventual **payload**. Nothing less, nothing more.
+It is pipe (**|**) separated and is composed of **operation**, **target** and eventual **payload**. Nothing less, nothing more.
 
 **Authentication**
 
@@ -69,7 +69,7 @@ Router.Operation("submit", request =>
 {
     if (request != null)
     {
-        return Task.FromResult(OperationResult.Ok($"Data submitted: {request.Content}"));
+        return Task.FromResult(OperationResult.Ok($"Data submitted: {request.Payload}"));
     }
 
     return Task.FromResult(OperationResult.Ko("No data provided"));
@@ -85,8 +85,9 @@ This class represents the request context.
  
 | Property  | Type   | Context                                              |
 |-----------|--------|------------------------------------------------------|
-| Operation | string | Contains the operation name.                         |
-| Content   | string | Contains the eventual payload sent to the operation. |
+| Name      | string | Contains the operation name.                         |
+| Target    | string | Contains the target name.                            |
+| Payload   | string | Contains the eventual payload sent to the operation. |
 | Origin    | string | Contains the IP address of the caller.               |
 
 ****OperationResponse****
@@ -95,21 +96,19 @@ This class represents the response context.
 
 | Property | Type   | Context                                                                |
 |----------|--------|------------------------------------------------------------------------|
-| Operation | string | Contains the operation name.                                           |
-| Success  | bool   | Contains the informations if an operation has been successfull or not. |
-| Content  | object | Contains the eventual content for the operation fullfillment.          |
+| Success  | bool   | Contains the informations if an operation has been successful or not.  |
+| Payload  | object | Contains the eventual payload for the operation fulfillment.           |
 
 ***Error management***
 
 Every error that will occur is intercepted by default from **SocketApi** 
 and will be returned an **OperationResponse** containing the **Success** property set to false 
-and **Content** one populated with the **Exception** occurred.
+and **Payload** one populated with the **Exception** occurred.
 
-| Property  | Type   | Context                                              |
-|-----------|--------|------------------------------------------------------|
-| Operation | string | Contains the operation name.                         |
-| Content   | string | Contains the eventual payload sent to the operation. |
-| Origin    | string | Contains the IP address of the caller.               |
+| Property | Type   | Context                                                               |
+|----------|--------|-----------------------------------------------------------------------|
+| Success  | bool   | Contains the informations if an operation has been successful or not. |
+| Payload  | object | Contains the eventual payload for the operation fulfillment.          |
 
 **How can I test it?**
 

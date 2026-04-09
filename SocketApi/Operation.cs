@@ -1,6 +1,11 @@
 namespace SocketApi;
 
-public class OperationTypes
+public enum Operation
 {
-    
+    Call, 
+    Pub, 
+    Sub, 
+    UnSub, 
+    Info, 
+    Ping
 }

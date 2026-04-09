@@ -1,28 +1,27 @@
-﻿namespace SocketApi;
+﻿using System.Collections.Concurrent;
+
+namespace SocketApi;
 
 public static class Router
 {
-    private static readonly Dictionary<string, Func<OperationRequest?, Task<OperationResult>>> Operations = new();
+    private static readonly ConcurrentDictionary<string, Func<OperationRequest?, Task<OperationResult>>> Targets = new();
 
-    public static void Operation(string operation, Func<OperationRequest?, Task<OperationResult>> action)
+    public static void Operation(string target, Func<OperationRequest?, Task<OperationResult>> action)
     {
-        Operations[operation] = action;
+        Targets[target] = action;
     }
 
-    internal static async Task<OperationResult> RouteRequestAsync(string operation, OperationRequest request)
+    internal static async Task<OperationResult> RouteRequestAsync(string target, OperationRequest request)
     {
-        if (Operations.TryGetValue(operation, out var action))
+        if (!Targets.TryGetValue(target, out var action))
+            return OperationResult.Ko($"Target '{target}' not found.");
+        try
         {
-            try
-            {
-                return await action(request);
-            }
-            catch (Exception ex)
-            {
-                return OperationResult.Ko(ex);
-            }
+            return await action(request);
         }
-
-        return OperationResult.Ko($"Operation '{operation}' not found.");
+        catch (Exception ex)
+        {
+            return OperationResult.Ko(ex);
+        }
     }
 }

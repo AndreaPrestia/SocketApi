@@ -17,10 +17,12 @@ internal sealed class TcpSslServer : IHostedService
     private readonly int _backlog;
     private readonly long _maxRequestLength;
     private readonly long _maxResponseLength;
+    private readonly CommandManager _commandManager = new(new PubSubManager());
     private readonly X509Certificate2 _certificate;
     private readonly ConcurrentDictionary<Guid, Task> _connectionTasks = new();
     private readonly ILogger<TcpSslServer> _logger;
-    private CancellationToken _cancellationToken;
+    private CancellationTokenSource _cancellationTokenSource = new();
+    private Socket? _listener;
 
     internal TcpSslServer(int port, X509Certificate2 certificate, int backlog, long maxRequestLength,
         long maxResponseLength, ILogger<TcpSslServer> logger)
@@ -35,17 +37,18 @@ internal sealed class TcpSslServer : IHostedService
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
-        _cancellationToken = cancellationToken;
-        var listener = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-        listener.Bind(new IPEndPoint(IPAddress.Any, _port));
-        listener.Listen(_backlog);
+        _cancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var token = _cancellationTokenSource.Token;
+        _listener = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        _listener.Bind(new IPEndPoint(IPAddress.Any, _port));
+        _listener.Listen(_backlog);
         _logger.LogInformation("Server listening on port {port}.", _port);
 
-        while (!_cancellationToken.IsCancellationRequested)
+        while (!token.IsCancellationRequested)
         {
-            var clientSocket = await listener.AcceptAsync(_cancellationToken);
+            var clientSocket = await _listener.AcceptAsync(token);
             var connectionId = Guid.NewGuid();
-            var connectionTask = HandleClientAsync(clientSocket, _cancellationToken);
+            var connectionTask = HandleClientAsync(clientSocket, token);
 
             _connectionTasks[connectionId] = connectionTask;
 
@@ -53,15 +56,17 @@ internal sealed class TcpSslServer : IHostedService
             {
                 _connectionTasks.TryRemove(connectionId, out var _);
                 _logger.LogDebug($"Connection {connectionId} cleaned up.");
-            }, TaskContinuationOptions.OnlyOnRanToCompletion));
+            }));
         }
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
         _logger.LogInformation("Shutting down TCP server...");
-        _cancellationToken = new CancellationToken(true);
+        await _cancellationTokenSource.CancelAsync();
+        _listener?.Dispose();
         await Task.WhenAll(_connectionTasks.Values);
+        _cancellationTokenSource.Dispose();
         _logger.LogInformation("All connections cleaned up.");
     }
 
@@ -79,31 +84,36 @@ internal sealed class TcpSslServer : IHostedService
             var buffer = new byte[_maxRequestLength];
             var bytesRead = await sslStream.ReadAsync(buffer, cancellationToken);
 
-            if (sslStream.CanRead && networkStream.DataAvailable)
+            if (bytesRead == _maxRequestLength && networkStream.DataAvailable)
             {
                 responseBytes =
-                    MessagePackSerializer.Serialize(OperationResult.Ko($"Max request length ({_maxResponseLength}) exceeded."), cancellationToken: cancellationToken);
+                    MessagePackSerializer.Serialize(
+                        OperationResult.Ko($"Max request length ({_maxRequestLength}) exceeded."),
+                        cancellationToken: cancellationToken);
             }
             else
             {
-                var (route, body) = ParseCustomProtocol(buffer.Take(bytesRead).ToArray());
+                var remoteEndPoint = clientSocket.RemoteEndPoint?.ToString();
+                var (operation, target, body) = ParseCustomProtocol(buffer.Take(bytesRead).ToArray());
 
-                var result = await Router.RouteRequestAsync(route,
-                    OperationRequest.From(route, clientSocket.RemoteEndPoint?.ToString(), body));
+                var result = await _commandManager.ManageAsync(OperationRequest.From(operation, target, body, remoteEndPoint));
 
                 responseBytes = MessagePackSerializer.Serialize(result, cancellationToken: cancellationToken);
 
                 if (responseBytes.Length > _maxResponseLength)
                 {
                     responseBytes =
-                        MessagePackSerializer.Serialize(OperationResult.Ko($"Max response length ({_maxResponseLength}) exceeded."), cancellationToken: cancellationToken);
+                        MessagePackSerializer.Serialize(
+                            OperationResult.Ko($"Max response length ({_maxResponseLength}) exceeded."),
+                            cancellationToken: cancellationToken);
                 }
             }
         }
         catch (Exception ex)
         {
             _logger.LogError("Error: {error}", ex.Message);
-            responseBytes = MessagePackSerializer.Serialize(OperationResult.Ko(ex.Message), cancellationToken: cancellationToken);
+            responseBytes =
+                MessagePackSerializer.Serialize(OperationResult.Ko(ex.Message), cancellationToken: cancellationToken);
         }
         finally
         {
@@ -114,14 +124,19 @@ internal sealed class TcpSslServer : IHostedService
         }
     }
 
-    private (string operation, string request) ParseCustomProtocol(
+    private (Operation operation, string target, string payload) ParseCustomProtocol(
         byte[] requestBytes)
     {
         var requestText = MessagePackSerializer.Deserialize<string>(requestBytes);
         var content = requestText.Split("|");
-        var operation = content[0];
-        var body = content.Length > 1 ? content[1] : string.Empty;
-        return (operation, body);
+
+        if (content.Length < 2)
+            throw new FormatException($"Invalid protocol format. Expected 'operation|target[|payload]', got: '{requestText}'");
+
+        var operation = Enum.Parse<Operation>(content[0], ignoreCase: true);
+        var target = content[1];
+        var body = content.Length > 2 ? content[2] : string.Empty;
+        return (operation, target, body);
     }
 
     private void FireAndForget(Task? task)

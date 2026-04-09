@@ -26,7 +26,7 @@
       <ProjectReference Include="..\SocketApi\SocketApi.csproj" />
     </ItemGroup>
 
-    <ItemGroup>
+    <ItemGroup Condition="Exists('Output.pfx')">
       <None Remove="Output.pfx" />
       <EmbeddedResource Include="Output.pfx">
         <CopyToOutputDirectory>Always</CopyToOutputDirectory>
