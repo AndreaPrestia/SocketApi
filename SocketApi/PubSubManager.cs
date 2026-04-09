@@ -1,38 +1,37 @@
 using System.Collections.Concurrent;
-using System.Net;
-using System.Net.Security;
-using System.Net.Sockets;
-using System.Security.Authentication;
 using MessagePack;
 
 namespace SocketApi;
 
 public class PubSubManager
 {
-    private static readonly ConcurrentDictionary<string, List<Subscription>> Subscriptions = new();
+    private readonly ConcurrentDictionary<string, List<Subscription>> _subscriptions = new();
+    private readonly ConcurrentDictionary<string, TaskCompletionSource<bool>> _pendingAcks = new();
+    private readonly IConnectionRegistry _connectionRegistry;
 
-    public Guid Subscribe(string target, string ipAddress, int port)
+    private const int MaxRetries = 3;
+    private static readonly int[] RetryDelaysMs = [100, 200, 400, 800];
+
+    public PubSubManager(IConnectionRegistry connectionRegistry)
+    {
+        _connectionRegistry = connectionRegistry;
+    }
+
+    public Guid Subscribe(string target, Guid connectionId, int qos = 0)
     {
         if (string.IsNullOrWhiteSpace(target))
         {
             throw new InvalidOperationException("No target provided");
         }
-        
-        var parsedIp = IPAddress.TryParse(ipAddress, out var ip);
-
-        if (!parsedIp)
-        {
-            throw new InvalidOperationException($"Invalid {ipAddress} ip");
-        }
 
         var subscription = new Subscription
         {
             Id = Guid.NewGuid(),
-            IpAddress = ip,
-            Port = port
+            ConnectionId = connectionId,
+            Qos = qos
         };
 
-        Subscriptions.AddOrUpdate(target,
+        _subscriptions.AddOrUpdate(target,
             _ => [subscription],
             (_, list) =>
             {
@@ -45,7 +44,7 @@ public class PubSubManager
 
     public bool UnSubscribe(Guid id, string target)
     {
-        if (!Subscriptions.TryGetValue(target, out var subscriptions))
+        if (!_subscriptions.TryGetValue(target, out var subscriptions))
             return false;
 
         lock (subscriptions)
@@ -55,50 +54,112 @@ public class PubSubManager
         }
     }
 
-    public int Publish(string target, string? payload)
+    public async Task<int> PublishAsync(string target, string? payload)
     {
         if (string.IsNullOrWhiteSpace(target)) return 0;
-
         if (string.IsNullOrWhiteSpace(payload)) return 0;
 
-        if (!Subscriptions.TryGetValue(target, out var subscriptions)) return 0;
-        lock (subscriptions)
-        {
-            foreach (var subscription in subscriptions.ToList())
-            {
-                try
-                {
-                    if (subscription.IpAddress == null)
-                    {
-                        throw new InvalidOperationException($"Client {subscription.Id} has no IpAddress");
-                    }
+        var matchingSubscriptions = GetMatchingSubscriptions(target);
+        if (matchingSubscriptions.Count == 0) return 0;
 
-                    var message = OperationResult.Ok($"SUB|{target}|{payload}");
-                    var responseBytes = MessagePackSerializer.Serialize(message);
-                    SendMessageToClient(subscription, responseBytes);
-                }
-                catch
-                {
-                    subscriptions.Remove(subscription);
-                }
+        var delivered = 0;
+
+        foreach (var subscription in matchingSubscriptions)
+        {
+            if (!_connectionRegistry.TryGet(subscription.ConnectionId, out var connection) || connection == null)
+            {
+                RemoveSubscriptionById(subscription.Id);
+                continue;
             }
 
-            return subscriptions.Count;
+            var messageId = Guid.NewGuid().ToString("N");
+            var message = new SubscriptionMessage(messageId, target, payload, subscription.Qos);
+            var messageBytes = MessagePackSerializer.Serialize(message);
+
+            try
+            {
+                if (subscription.Qos == 0)
+                {
+                    await connection.WriteAsync(messageBytes);
+                    delivered++;
+                }
+                else
+                {
+                    var acked = await DeliverWithRetryAsync(connection, messageBytes, messageId);
+                    if (acked) delivered++;
+                    else RemoveSubscriptionById(subscription.Id);
+                }
+            }
+            catch
+            {
+                RemoveSubscriptionById(subscription.Id);
+            }
+        }
+
+        return delivered;
+    }
+
+    public void AcknowledgeMessage(string messageId)
+    {
+        if (_pendingAcks.TryRemove(messageId, out var tcs))
+        {
+            tcs.TrySetResult(true);
         }
     }
 
-    private void SendMessageToClient(Subscription subscription, byte[] message)
+    private async Task<bool> DeliverWithRetryAsync(ActiveConnection connection, byte[] messageBytes, string messageId)
     {
-        using var tcpClient = new TcpClient();
-        tcpClient.Connect(subscription.IpAddress!, subscription.Port);
+        for (var attempt = 0; attempt <= MaxRetries; attempt++)
+        {
+            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _pendingAcks[messageId] = tcs;
 
-        using var networkStream = tcpClient.GetStream();
-        using var sslStream = new SslStream(networkStream, false);
+            try
+            {
+                await connection.WriteAsync(messageBytes);
 
-        sslStream.AuthenticateAsClient(subscription.IpAddress!.ToString(), null, SslProtocols.Tls12,
-            checkCertificateRevocation: true);
+                var delayMs = attempt < RetryDelaysMs.Length ? RetryDelaysMs[attempt] : RetryDelaysMs[^1];
+                var acked = await Task.WhenAny(tcs.Task, Task.Delay(delayMs)) == tcs.Task;
 
-        sslStream.Write(message);
-        sslStream.Flush();
+                if (acked) return true;
+
+                _pendingAcks.TryRemove(messageId, out _);
+            }
+            catch
+            {
+                _pendingAcks.TryRemove(messageId, out _);
+                return false;
+            }
+        }
+
+        return false;
+    }
+
+    private List<Subscription> GetMatchingSubscriptions(string topic)
+    {
+        var result = new List<Subscription>();
+
+        foreach (var kvp in _subscriptions)
+        {
+            if (!TopicMatcher.Matches(kvp.Key, topic)) continue;
+
+            lock (kvp.Value)
+            {
+                result.AddRange(kvp.Value);
+            }
+        }
+
+        return result;
+    }
+
+    private void RemoveSubscriptionById(Guid subscriptionId)
+    {
+        foreach (var kvp in _subscriptions)
+        {
+            lock (kvp.Value)
+            {
+                kvp.Value.RemoveAll(s => s.Id == subscriptionId);
+            }
+        }
     }
 }

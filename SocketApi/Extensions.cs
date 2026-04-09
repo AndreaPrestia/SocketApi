@@ -9,13 +9,18 @@ public static class Extensions
 {
     public static IHostBuilder AddSocketApi(this IHostBuilder builder, int port, X509Certificate2 certificate,
         long maxRequestLength = 1024 * 1024,
-        long maxResponseLength  = 1024 * 1024,
-        int backlog = 100)
+        long maxResponseLength = 1024 * 1024,
+        int backlog = 100,
+        int heartbeatTimeoutSeconds = 30)
     {
         return builder.ConfigureServices((_, services) =>
         {
+            var connectionRegistry = new ConnectionRegistry();
+            services.AddSingleton<IConnectionRegistry>(connectionRegistry);
             services.AddHostedService(serviceProvider => new TcpSslServer(port, certificate,
                 backlog, maxRequestLength, maxResponseLength,
+                TimeSpan.FromSeconds(heartbeatTimeoutSeconds),
+                connectionRegistry,
                 serviceProvider.GetRequiredService<ILogger<TcpSslServer>>()));
         });
     }

@@ -9,9 +9,11 @@ public class CommandManager(PubSubManager manager)
         return request.Name switch
         {
             Operation.Call => await Router.RouteRequestAsync(request.Target, request),
-            Operation.Pub => Publish(request),
+            Operation.Pub => await PublishAsync(request),
             Operation.Sub => Subscribe(request),
             Operation.UnSub => UnSubscribe(request),
+            Operation.Ack => Acknowledge(request),
+            Operation.Heartbeat => OperationResult.Ok("OK"),
             Operation.Info => OperationResult.Ok(
                 $"SocketApi running on version: v.{Assembly.GetExecutingAssembly().GetName().Version}"),
             Operation.Ping => OperationResult.Ok("PONG"),
@@ -19,32 +21,22 @@ public class CommandManager(PubSubManager manager)
         };
     }
 
-    private OperationResult Publish(OperationRequest request)
+    private async Task<OperationResult> PublishAsync(OperationRequest request)
     {
-        var result = manager.Publish(request.Target, request.Payload);
-        return result != -1 ? OperationResult.Ok(result) : OperationResult.Ko(result);
+        var result = await manager.PublishAsync(request.Target, request.Payload);
+        return OperationResult.Ok(result);
     }
 
     private OperationResult Subscribe(OperationRequest request)
     {
-        var splitOrigin = request.Origin?.Split(':');
+        var connectionIdParsed = Guid.TryParse(request.Origin, out var connectionId);
 
-        if (splitOrigin is not { Length: 2 })
+        if (!connectionIdParsed)
         {
-            return OperationResult.Ko("Invalid origin");
-        } 
-        
-        var ipAddress = splitOrigin[0];
-        
-        var portParsed = int.TryParse(splitOrigin[1], out var port);
-
-        if (!portParsed)
-        {
-            return OperationResult.Ko("Invalid port");
+            return OperationResult.Ko("Invalid connection id");
         }
-        
-        var result = manager.Subscribe(request.Target, ipAddress, port);
-        
+
+        var result = manager.Subscribe(request.Target, connectionId, request.Qos);
         return OperationResult.Ok(result);
     }
 
@@ -60,5 +52,16 @@ public class CommandManager(PubSubManager manager)
         var unsubResult = manager.UnSubscribe(id, request.Target);
 
         return unsubResult ? OperationResult.Ok("OK") : OperationResult.Ko("KO");
+    }
+
+    private OperationResult Acknowledge(OperationRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.MessageId))
+        {
+            return OperationResult.Ko("Missing message id");
+        }
+
+        manager.AcknowledgeMessage(request.MessageId);
+        return OperationResult.Ok("OK");
     }
 }

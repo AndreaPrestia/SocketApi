@@ -7,5 +7,7 @@ public enum Operation
     Sub, 
     UnSub, 
     Info, 
-    Ping
+    Ping,
+    Ack,
+    Heartbeat
 }
