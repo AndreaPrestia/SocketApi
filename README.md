@@ -1,117 +1,153 @@
 ﻿# SocketApi
 
-A light-weight communication protocol and server written over TCP totally written in .NET.
+A lightweight TCP/SSL message broker for .NET — combining RPC and Pub/Sub in a single binary protocol.
 
-The **SocketApi** project contains the logic for communication on a simple binary protocol that uses **MessagePack** as encoding.
+## What is it for?
 
-**Requirements**
+SocketApi is a minimal server library that lets .NET applications exchange messages over persistent TCP/SSL connections using a simple pipe-separated protocol encoded with MessagePack.
+
+It covers two patterns in one connection:
+
+- **RPC** (request → response): register a handler, call it by name, get a result back
+- **Pub/Sub** (publish → push): subscribe to topics with MQTT-style wildcards, receive messages pushed by the server
+
+This makes it useful when you need real-time bidirectional communication without the overhead of HTTP, gRPC or a full message broker like RabbitMQ.
+
+### Concrete use cases
+
+- **IoT edge gateway** — sensors publish telemetry to hierarchical topics (`sensors/building-a/floor-2/temperature`), applications subscribe with wildcards (`sensors/building-a/#`). QoS 1 guarantees delivery, heartbeat detects offline devices
+- **Real-time notifications** — a backend publishes events, dashboards and mobile apps receive push messages on the same persistent connection
+- **Microservice IPC** — RPC for synchronous request-response, Pub/Sub for async events, one TCP connection for both
+- **Command & control** — send commands to remote agents with reliable delivery (QoS 1 with retry backoff)
+- **Prototyping** — a working message broker in one line of configuration, zero external infrastructure
+
+### What it's not for
+
+- Horizontal scaling (single instance, no clustering)
+- Large file transfers (1 MB default message limit)
+- Exactly-once delivery (QoS 1 = at-least-once)
+- Multi-tenant isolation
+
+## Requirements
 
 - [.NET 8](https://learn.microsoft.com/en-us/dotnet/core/whats-new/dotnet-8/overview)
-- [MessagePack](https://msgpack.org/)
-- [mTLS](https://www.cloudflare.com/learning/access-management/what-is-mutual-tls/)
+- An X.509 certificate for TLS
 
-**Dependencies**
+## Dependencies
 
-- Microsoft.Extensions.Hosting.Abstractions 8.0.1
-- MessagePack 3.1.3
+| Package | Version | Purpose |
+|---------|---------|---------|
+| MessagePack | 3.1.3 | Binary serialization |
+| Microsoft.Extensions.Hosting.Abstractions | 8.0.1 | `IHostedService` integration |
+| Microsoft.Extensions.Logging.Abstractions | 8.0.2 | Logging |
 
-**Protocol**
+## Protocol
 
-It is very simple and runs on top of TCP over SSL.
-
-```
-operation|target|payload
-```
-
-It is pipe (**|**) separated and is composed of **operation** and eventual **payload**. Nothing less, nothing more.
-
-**Authentication**
-
-The authentication is made with mTLS. Obviously every communication must be processed over SSL.
-
-**Usage of SocketApi**
-
-Code example:
+Binary MessagePack over TCP/TLS 1.2. Pipe-separated fields:
 
 ```
-var builder = Host.CreateDefaultBuilder(args)
-    .ConfigureLogging(logging =>
-    {
-        logging.ClearProviders();
-        logging.AddConsole();
-        logging.SetMinimumLevel(LogLevel.Debug);
-    })
-    .AddSocketApi(443, new X5092Certificate("certPath", "certPassword"), 100);
+operation|target|payload|messageId|qos
+```
 
-var host = builder.Build();
+| Field | Required | Description |
+|-------|----------|-------------|
+| `operation` | Yes | `Call`, `Pub`, `Sub`, `UnSub`, `Ack`, `Heartbeat`, `Info`, `Ping` |
+| `target` | Yes | Handler name (RPC) or topic (Pub/Sub) |
+| `payload` | No | Operation-specific data |
+| `messageId` | No | UUID for QoS acknowledgment |
+| `qos` | No | `0` = fire-and-forget (default), `1` = at-least-once with retry |
+
+Fields 4-5 are optional for backward compatibility.
+
+### Topic wildcards (MQTT-style)
+
+| Pattern | Matches |
+|---------|---------|
+| `sensors/temperature` | Exact match only |
+| `sensors/*` | `sensors/temperature`, `sensors/humidity` (single level) |
+| `sensors/#` | `sensors/temperature`, `sensors/floor-1/humidity` (all levels) |
+
+## Quick start
+
+```csharp
+var host = Host.CreateDefaultBuilder(args)
+    .AddSocketApi(port: 8443, certificate: new X509Certificate2("cert.pfx", "password"))
+    .Build();
+
+// Register an RPC handler
+Router.Operation("login", request =>
+    string.Equals("admin:secret", request?.Payload)
+        ? Task.FromResult(OperationResult.Ok("Logged in"))
+        : Task.FromResult(OperationResult.Ko("Invalid credentials")));
 
 await host.RunAsync();
 ```
 
-The example above initialize the **SocketApi** server in a console application, with console logging provider using the method **AddSocketApi**.
+### Configuration parameters
 
-The parameters of the method are:
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `port` | `int` | — | TCP port to listen on |
+| `certificate` | `X509Certificate2` | — | TLS certificate |
+| `maxRequestLength` | `long` | 1 MB | Maximum request size in bytes |
+| `maxResponseLength` | `long` | 1 MB | Maximum response size in bytes |
+| `backlog` | `int` | 100 | TCP listen queue length |
+| `heartbeatTimeoutSeconds` | `int` | 30 | Seconds before a connection without heartbeat is removed |
 
-| Parameter   | Type             | Context                                                      |
-|-------------|------------------|--------------------------------------------------------------|
-| port        | int              | The port where the application should listen.                |
-| certificate | X5092Certificate | It's the certificate to use.                                 |
-| backlog     | int           | The maximum length of the connections queue. Default at 100. |
-
-**Expose an operation**
-
-To expose an operation the **Router** class must be used.
+## Architecture
 
 ```
-Router.Operation("submit", request =>
-{
-    if (request != null)
-    {
-        return Task.FromResult(OperationResult.Ok($"Data submitted: {request.Payload}"));
-    }
-
-    return Task.FromResult(OperationResult.Ko("No data provided"));
-});
+Client TCP/SSL ──► AcceptLoop ──► HandleClientAsync (persistent connection)
+                                      │
+                                ParseCustomProtocol
+                                      │
+                     ┌────────────────┼──────────────┐
+                     ▼                ▼              ▼
+                   Call            Pub/Sub       Heartbeat
+                     │                │
+                  Router       PubSubManager
+                                      │
+                              TopicMatcher (wildcards)
+                                      │
+                              QoS 0: fire-and-forget
+                              QoS 1: retry with backoff
 ```
-The example above exposes a **submit** operation and returns an **OperationResult.Ok**.
 
-***Classes***
+- **Persistent connections**: one TCP/SSL connection handles multiple operations in a loop
+- **Thread-safe writes**: each connection uses a `SemaphoreSlim` to serialize SSL writes
+- **Graceful shutdown**: drains active connections with a 10-second timeout before force-closing
+- **Heartbeat**: background task removes stale connections after configurable timeout
 
-****OperationRequest****
+## API reference
 
-This class represents the request context.
- 
-| Property | Type   | Context                                              |
-|----------|--------|------------------------------------------------------|
-| Name     | string | Contains the operation name.                         |
-| Target   | string | Contains the target name.                            |
-| Payload  | string | Contains the eventual payload sent to the operation. |
-| Origin   | string | Contains the IP address of the caller.               |
+### OperationRequest
 
-****OperationResponse****
+| Property | Type | Description |
+|----------|------|-------------|
+| `Name` | `Operation` | The operation enum value |
+| `Target` | `string` | Handler name or topic |
+| `Payload` | `string?` | Request data |
+| `Origin` | `string?` | Connection ID (set by server) |
+| `MessageId` | `string?` | Message ID for QoS acknowledgment |
+| `Qos` | `int` | Quality of service level |
 
-This class represents the response context.
+### OperationResult
 
-| Property | Type   | Context                                                              |
-|----------|--------|----------------------------------------------------------------------|
-| Name     | string | Contains the operation name.                                         |
-| Target   | string | Contains the target name.                                            |
-| Success  | bool   | Contains the informations if an operation has been successful or not.|
-| Payload  | object | Contains the eventual payload for the operation fulfillment.         |
+| Property | Type | Description |
+|----------|------|-------------|
+| `Success` | `bool` | Whether the operation succeeded |
+| `Payload` | `object?` | Response data |
 
-***Error management***
+Errors are caught automatically — failed operations return `OperationResult.Ko` with the exception in `Payload`.
 
-Every error that will occur is intercepted by default from **SocketApi** 
-and will be returned an **OperationResponse** containing the **Success** property set to false 
-and **Payload** one populated with the **Exception** occurred.
+## Tests
 
-| Property | Type   | Context                                                               |
-|----------|--------|-----------------------------------------------------------------------|
-| Success  | bool   | Contains the informations if an operation has been successful or not. |
-| Payload  | object | Contains the eventual payload for the operation fulfillment.          |
+```bash
+dotnet test SocketApi.Tests --filter "FullyQualifiedName!~TcpSslServerTests"
+```
 
-**How can I test it?**
+80 unit tests covering all components. Integration tests (`TcpSslServerTests`) require a valid certificate file.
 
-This repository provides a test project where you can find tests for **SocketApi**.
+## License
 
-The project name is **SockerApi.Tests**.
+See [LICENSE.txt](LICENSE.txt).

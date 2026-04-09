@@ -17,11 +17,11 @@ public static class Extensions
         {
             var connectionRegistry = new ConnectionRegistry();
             services.AddSingleton<IConnectionRegistry>(connectionRegistry);
-            services.AddHostedService(serviceProvider => new TcpSslServer(port, certificate,
+            services.AddHostedService(sp => new TcpSslServer(port, certificate,
                 backlog, maxRequestLength, maxResponseLength,
                 TimeSpan.FromSeconds(heartbeatTimeoutSeconds),
                 connectionRegistry,
-                serviceProvider.GetRequiredService<ILogger<TcpSslServer>>()));
+                sp.GetRequiredService<ILogger<TcpSslServer>>()));
         });
     }
 }

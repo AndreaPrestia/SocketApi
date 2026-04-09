@@ -25,6 +25,7 @@ internal sealed class TcpSslServer : IHostedService
     private readonly ILogger<TcpSslServer> _logger;
     private CancellationTokenSource _cancellationTokenSource = new();
     private Socket? _listener;
+    private Task? _acceptTask;
     private Task? _heartbeatTask;
 
     internal TcpSslServer(int port, X509Certificate2 certificate, int backlog, long maxRequestLength,
@@ -42,22 +43,80 @@ internal sealed class TcpSslServer : IHostedService
         _commandManager = new CommandManager(new PubSubManager(connectionRegistry));
     }
 
-    public async Task StartAsync(CancellationToken cancellationToken)
+    public Task StartAsync(CancellationToken cancellationToken)
     {
         _cancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var token = _cancellationTokenSource.Token;
+
         _listener = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
         _listener.Bind(new IPEndPoint(IPAddress.Any, _port));
         _listener.Listen(_backlog);
-        _logger.LogInformation("Server listening on port {port}.", _port);
 
         _heartbeatTask = RunHeartbeatCleanupAsync(token);
+        _acceptTask = AcceptLoopAsync(token);
 
-        while (!token.IsCancellationRequested)
+        _logger.LogInformation("Server listening on port {port}.", _port);
+        return Task.CompletedTask;
+    }
+
+    public async Task StopAsync(CancellationToken cancellationToken)
+    {
+        _logger.LogInformation("Shutting down ({count} active connections)...", _connectionTasks.Count);
+
+        _listener?.Dispose();
+        _listener = null;
+
+        await _cancellationTokenSource.CancelAsync();
+
+        if (_acceptTask != null)
+            await _acceptTask;
+        if (_heartbeatTask != null)
+            await _heartbeatTask;
+
+        try
         {
-            var clientSocket = await _listener.AcceptAsync(token);
+            await Task.WhenAll(_connectionTasks.Values)
+                .WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
+        }
+        catch (TimeoutException)
+        {
+            _logger.LogWarning("Shutdown timeout. Force-closing {count} connections.", _connectionTasks.Count);
+        }
+        catch (OperationCanceledException)
+        {
+            // Host is forcing shutdown
+        }
+
+        foreach (var connection in _connectionRegistry.GetAll())
+        {
+            try { await connection.DisposeAsync(); }
+            catch { /* best effort */ }
+        }
+
+        _cancellationTokenSource.Dispose();
+        _logger.LogInformation("Server stopped.");
+    }
+
+    private async Task AcceptLoopAsync(CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            Socket clientSocket;
+            try
+            {
+                clientSocket = await _listener!.AcceptAsync(cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch (ObjectDisposedException)
+            {
+                break;
+            }
+
             var connectionId = Guid.NewGuid();
-            var connectionTask = HandleClientAsync(clientSocket, connectionId, token);
+            var connectionTask = HandleClientAsync(clientSocket, connectionId, cancellationToken);
 
             _connectionTasks[connectionId] = connectionTask;
 
@@ -68,18 +127,6 @@ internal sealed class TcpSslServer : IHostedService
                 _logger.LogDebug("Connection {connectionId} cleaned up.", connectionId);
             }));
         }
-    }
-
-    public async Task StopAsync(CancellationToken cancellationToken)
-    {
-        _logger.LogInformation("Shutting down TCP server...");
-        await _cancellationTokenSource.CancelAsync();
-        _listener?.Dispose();
-        if (_heartbeatTask != null)
-            await _heartbeatTask;
-        await Task.WhenAll(_connectionTasks.Values);
-        _cancellationTokenSource.Dispose();
-        _logger.LogInformation("All connections cleaned up.");
     }
 
     private async Task HandleClientAsync(Socket clientSocket, Guid connectionId, CancellationToken cancellationToken)
@@ -101,7 +148,7 @@ internal sealed class TcpSslServer : IHostedService
             try
             {
                 bytesRead = await sslStream.ReadAsync(buffer, cancellationToken);
-                if (bytesRead == 0) break; // Client disconnected
+                if (bytesRead == 0) break;
             }
             catch (OperationCanceledException)
             {
@@ -109,7 +156,7 @@ internal sealed class TcpSslServer : IHostedService
             }
             catch
             {
-                break; // Connection lost
+                break;
             }
 
             byte[] responseBytes;
@@ -157,7 +204,7 @@ internal sealed class TcpSslServer : IHostedService
             }
             catch
             {
-                break; // Cannot write — connection lost
+                break;
             }
         }
 
@@ -172,7 +219,8 @@ internal sealed class TcpSslServer : IHostedService
         var content = requestText.Split("|");
 
         if (content.Length < 2)
-            throw new FormatException($"Invalid protocol format. Expected 'operation|target[|payload[|messageId[|qos]]]', got: '{requestText}'");
+            throw new FormatException(
+                $"Invalid protocol format. Expected 'operation|target[|payload[|messageId[|qos]]]', got: '{requestText}'");
 
         var operation = Enum.Parse<Operation>(content[0], ignoreCase: true);
         var target = content[1];

@@ -3,19 +3,13 @@ using MessagePack;
 
 namespace SocketApi;
 
-public class PubSubManager
+public class PubSubManager(IConnectionRegistry connectionRegistry)
 {
     private readonly ConcurrentDictionary<string, List<Subscription>> _subscriptions = new();
     private readonly ConcurrentDictionary<string, TaskCompletionSource<bool>> _pendingAcks = new();
-    private readonly IConnectionRegistry _connectionRegistry;
 
     private const int MaxRetries = 3;
     private static readonly int[] RetryDelaysMs = [100, 200, 400, 800];
-
-    public PubSubManager(IConnectionRegistry connectionRegistry)
-    {
-        _connectionRegistry = connectionRegistry;
-    }
 
     public Guid Subscribe(string target, Guid connectionId, int qos = 0)
     {
@@ -66,7 +60,7 @@ public class PubSubManager
 
         foreach (var subscription in matchingSubscriptions)
         {
-            if (!_connectionRegistry.TryGet(subscription.ConnectionId, out var connection) || connection == null)
+            if (!connectionRegistry.TryGet(subscription.ConnectionId, out var connection) || connection == null)
             {
                 RemoveSubscriptionById(subscription.Id);
                 continue;
