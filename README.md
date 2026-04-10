@@ -98,6 +98,16 @@ Client A:  ← receives push {MessageId, Topic: "sensors/temperature", Payload: 
 Client A:  Ack|<messageId>                        → acknowledges delivery (QoS 1)
 ```
 
+The server can also publish directly from an RPC handler using `Router.Publish`:
+
+```csharp
+Router.Operation("broadcast", async request =>
+{
+    var count = await Router.Publish("notifications/global", request?.Payload);
+    return OperationResult.Ok($"Sent to {count} subscribers");
+});
+```
+
 Wildcard subscriptions work the same way:
 
 ```

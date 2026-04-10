@@ -40,7 +40,9 @@ internal sealed class TcpSslServer : IHostedService
         _heartbeatTimeout = heartbeatTimeout;
         _backlog = backlog;
         _connectionRegistry = connectionRegistry;
-        _commandManager = new CommandManager(new PubSubManager(connectionRegistry));
+        var pubSubManager = new PubSubManager(connectionRegistry);
+        Router.SetPubSubManager(pubSubManager);
+        _commandManager = new CommandManager(pubSubManager);
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
