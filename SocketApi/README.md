@@ -1,10 +1,10 @@
 ﻿# SocketApi
 
-A lightweight TCP/SSL message broker for .NET — combining RPC and Pub/Sub in a single binary protocol.
+A lightweight TCP/SSL message broker built in .NET — combining RPC and Pub/Sub in a single binary protocol. Clients can be written in any language.
 
 ## What is it for?
 
-SocketApi lets .NET applications exchange messages over persistent TCP/SSL connections using a pipe-separated protocol encoded with MessagePack. One connection handles both RPC (request → response) and Pub/Sub (publish → push to subscribers).
+SocketApi is a .NET server library that exposes a language-agnostic protocol over persistent TCP/SSL connections. Any client that supports TCP sockets and MessagePack can connect — Python, Node.js, Go, Rust, Java, C++. One connection handles both RPC (request → response) and Pub/Sub (publish → push to subscribers).
 
 **Use cases**: IoT edge gateways, real-time notifications, microservice IPC, command & control, prototyping event-driven systems — anywhere you need low-latency bidirectional messaging without HTTP overhead or external infrastructure.
 

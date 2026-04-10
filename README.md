@@ -1,10 +1,10 @@
 ﻿# SocketApi
 
-A lightweight TCP/SSL message broker for .NET — combining RPC and Pub/Sub in a single binary protocol.
+A lightweight TCP/SSL message broker built in .NET — combining RPC and Pub/Sub in a single binary protocol. Clients can be written in any language that supports TCP sockets and MessagePack.
 
 ## What is it for?
 
-SocketApi is a minimal server library that lets .NET applications exchange messages over persistent TCP/SSL connections using a simple pipe-separated protocol encoded with MessagePack.
+SocketApi is a minimal server library built in .NET that exposes a language-agnostic protocol over persistent TCP/SSL connections. Any client — Python, Node.js, Go, Rust, Java, C++ — can connect using a simple pipe-separated text protocol and MessagePack for binary serialization.
 
 It covers two patterns in one connection:
 
@@ -93,6 +93,193 @@ await host.RunAsync();
 | `maxResponseLength` | `long` | 1 MB | Maximum response size in bytes |
 | `backlog` | `int` | 100 | TCP listen queue length |
 | `heartbeatTimeoutSeconds` | `int` | 30 | Seconds before a connection without heartbeat is removed |
+
+## Client examples
+
+The protocol is language-agnostic. Any client that speaks TCP/TLS and MessagePack can connect. Requests are MessagePack-encoded strings with pipe-separated fields; responses are MessagePack maps.
+
+### Python
+
+```bash
+pip install msgpack
+```
+
+```python
+import socket, ssl, msgpack
+
+ctx = ssl.create_default_context()
+ctx.check_hostname = False
+ctx.verify_mode = ssl.CERT_NONE  # dev only — use proper CA in production
+
+sock = ctx.wrap_socket(
+    socket.create_connection(("localhost", 8443)),
+    server_hostname="localhost")
+
+unpacker = msgpack.Unpacker(raw=False)
+
+# RPC call
+sock.sendall(msgpack.packb("Call|login|admin:secret"))
+unpacker.feed(sock.recv(4096))
+for response in unpacker:
+    print(response)  # {0: True, 1: "Logged in"}
+
+# Subscribe to a topic with wildcard
+sock.sendall(msgpack.packb("Sub|sensors/#||msg-001|1"))
+unpacker.feed(sock.recv(4096))
+for response in unpacker:
+    print(response)  # {0: True, 1: "Subscribed"}
+
+# Receive push messages
+while True:
+    unpacker.feed(sock.recv(4096))
+    for msg in unpacker:
+        if isinstance(msg[0], str):  # SubscriptionMessage
+            print(f"Topic: {msg[1]}, Payload: {msg[2]}")
+            if msg[3] > 0:  # QoS 1 → send Ack
+                sock.sendall(msgpack.packb(f"Ack|{msg[0]}"))
+                unpacker.feed(sock.recv(4096))
+```
+
+### Node.js
+
+```bash
+npm install @msgpack/msgpack
+```
+
+```javascript
+const tls = require("tls");
+const { encode, Decoder } = require("@msgpack/msgpack");
+
+const sock = tls.connect(8443, "localhost", { rejectUnauthorized: false });
+const decoder = new Decoder();
+
+sock.on("secureConnect", () => {
+  sock.write(Buffer.from(encode("Call|login|admin:secret")));
+});
+
+sock.on("data", (chunk) => {
+  const msg = decoder.decode(chunk);
+  if (typeof msg[0] === "boolean") {
+    console.log("RPC:", msg);        // { 0: true, 1: "Logged in" }
+  } else {
+    console.log("Push:", msg);       // { 0: msgId, 1: topic, 2: payload, 3: qos }
+    if (msg[3] > 0)
+      sock.write(Buffer.from(encode(`Ack|${msg[0]}`)));
+  }
+});
+```
+
+### Go
+
+```bash
+go get github.com/vmihailenco/msgpack/v5
+```
+
+```go
+package main
+
+import (
+    "crypto/tls"
+    "fmt"
+    "github.com/vmihailenco/msgpack/v5"
+)
+
+func main() {
+    conn, _ := tls.Dial("tcp", "localhost:8443",
+        &tls.Config{InsecureSkipVerify: true})
+    defer conn.Close()
+
+    // Send RPC
+    req, _ := msgpack.Marshal("Call|login|admin:secret")
+    conn.Write(req)
+
+    // Read response
+    dec := msgpack.NewDecoder(conn)
+    var resp map[int]interface{}
+    dec.Decode(&resp)
+    fmt.Println(resp) // map[0:true 1:Logged in]
+
+    // Subscribe
+    sub, _ := msgpack.Marshal("Sub|sensors/#||msg-001|1")
+    conn.Write(sub)
+    dec.Decode(&resp)
+
+    // Receive push messages
+    for {
+        var msg map[int]interface{}
+        dec.Decode(&msg)
+        fmt.Printf("Topic: %s, Payload: %s\n", msg[1], msg[2])
+        if qos, ok := msg[3].(int8); ok && qos > 0 {
+            ack, _ := msgpack.Marshal(fmt.Sprintf("Ack|%s", msg[0]))
+            conn.Write(ack)
+            dec.Decode(&resp)
+        }
+    }
+}
+```
+
+### C
+
+```bash
+# Dependencies: OpenSSL, msgpack-c
+# Debian/Ubuntu: apt install libssl-dev libmsgpack-dev
+# macOS: brew install openssl msgpack-c
+```
+
+```c
+#include <openssl/ssl.h>
+#include <msgpack.h>
+#include <string.h>
+#include <unistd.h>
+#include <netdb.h>
+
+static void send_request(SSL *ssl, const char *text) {
+    msgpack_sbuffer sbuf;
+    msgpack_packer pk;
+    msgpack_sbuffer_init(&sbuf);
+    msgpack_packer_init(&pk, &sbuf, msgpack_sbuffer_write);
+    msgpack_pack_str(&pk, strlen(text));
+    msgpack_pack_str_body(&pk, text, strlen(text));
+    SSL_write(ssl, sbuf.data, sbuf.size);
+    msgpack_sbuffer_destroy(&sbuf);
+}
+
+int main(void) {
+    SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+
+    struct hostent *host = gethostbyname("localhost");
+    struct sockaddr_in addr = {
+        .sin_family = AF_INET,
+        .sin_port = htons(8443),
+    };
+    memcpy(&addr.sin_addr, host->h_addr, host->h_length);
+    connect(fd, (struct sockaddr *)&addr, sizeof(addr));
+
+    SSL *ssl = SSL_new(ctx);
+    SSL_set_fd(ssl, fd);
+    SSL_connect(ssl);
+
+    /* RPC call */
+    send_request(ssl, "Call|login|admin:secret");
+
+    /* Read response */
+    char buf[4096];
+    int n = SSL_read(ssl, buf, sizeof(buf));
+    msgpack_unpacked result;
+    msgpack_unpacked_init(&result);
+    msgpack_unpack_next(&result, buf, n, NULL);
+    msgpack_object_print(stdout, result.data);  /* {0: true, 1: "Logged in"} */
+    printf("\n");
+    msgpack_unpacked_destroy(&result);
+
+    SSL_shutdown(ssl);
+    SSL_free(ssl);
+    close(fd);
+    SSL_CTX_free(ctx);
+    return 0;
+}
+```
 
 ## Architecture
 
