@@ -69,6 +69,8 @@ Fields 4-5 are optional for backward compatibility.
 
 ## Quick start
 
+### RPC (request → response)
+
 ```csharp
 var host = Host.CreateDefaultBuilder(args)
     .AddSocketApi(port: 8443, certificate: new X509Certificate2("cert.pfx", "password"))
@@ -82,6 +84,29 @@ Router.Operation("login", request =>
 
 await host.RunAsync();
 ```
+
+Client sends `Call|login|admin:secret` → receives `{Success: true, Payload: "Logged in"}`.
+
+### Pub/Sub (publish → push)
+
+Pub/Sub is entirely protocol-driven — clients subscribe and publish via the same connection:
+
+```
+Client A:  Sub|sensors/temperature||msg-001|1     → subscribes with QoS 1
+Client B:  Pub|sensors/temperature|22.5           → publishes to topic
+Client A:  ← receives push {MessageId, Topic: "sensors/temperature", Payload: "22.5", Qos: 1}
+Client A:  Ack|<messageId>                        → acknowledges delivery (QoS 1)
+```
+
+Wildcard subscriptions work the same way:
+
+```
+Client A:  Sub|sensors/#                          → subscribes to all sensor topics (QoS 0)
+Client B:  Pub|sensors/floor-1/humidity|65        → publishes
+Client A:  ← receives push for "sensors/floor-1/humidity"
+```
+
+To unsubscribe, the client sends `UnSub|sensors/#|<subscriptionId>` using the ID returned by `Sub`.
 
 ### Configuration parameters
 
@@ -154,7 +179,13 @@ const sock = tls.connect(8443, "localhost", { rejectUnauthorized: false });
 const decoder = new Decoder();
 
 sock.on("secureConnect", () => {
+  // RPC call
   sock.write(Buffer.from(encode("Call|login|admin:secret")));
+
+  // Subscribe to a topic with wildcard
+  setTimeout(() => {
+    sock.write(Buffer.from(encode("Sub|sensors/#||msg-001|1")));
+  }, 100);
 });
 
 sock.on("data", (chunk) => {
@@ -272,6 +303,22 @@ int main(void) {
     msgpack_object_print(stdout, result.data);  /* {0: true, 1: "Logged in"} */
     printf("\n");
     msgpack_unpacked_destroy(&result);
+
+    /* Subscribe to a topic */
+    send_request(ssl, "Sub|sensors/#||msg-001|1");
+    n = SSL_read(ssl, buf, sizeof(buf));
+    /* Read sub confirmation... */
+
+    /* Receive push messages */
+    while ((n = SSL_read(ssl, buf, sizeof(buf))) > 0) {
+        msgpack_unpacked msg;
+        msgpack_unpacked_init(&msg);
+        msgpack_unpack_next(&msg, buf, n, NULL);
+        msgpack_object_print(stdout, msg.data);
+        printf("\n");
+        /* If QoS > 0, send Ack with the MessageId */
+        msgpack_unpacked_destroy(&msg);
+    }
 
     SSL_shutdown(ssl);
     SSL_free(ssl);
