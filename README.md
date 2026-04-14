@@ -89,23 +89,49 @@ Client sends `Call|login|admin:secret` → receives `{Success: true, Payload: "L
 
 ### Pub/Sub (publish → push)
 
-Pub/Sub is entirely protocol-driven — clients subscribe and publish via the same connection:
+Topics are dynamic — **no server-side registration is needed**. Any client can subscribe to any topic at any time, and any client (or the server itself) can publish to it.
+
+A complete server with both RPC and Pub/Sub:
+
+```csharp
+var host = Host.CreateDefaultBuilder(args)
+    .AddSocketApi(port: 8443, certificate: new X509Certificate2("cert.pfx", "password"))
+    .Build();
+
+// RPC handler that publishes to subscribers
+Router.Operation("submit-reading", async request =>
+{
+    // Process the reading, then push it to all subscribers of this topic
+    var count = await Router.Publish("sensors/temperature", request?.Payload);
+    return OperationResult.Ok($"Published to {count} subscribers");
+});
+
+// Server-side periodic publish (e.g. heartbeat, status broadcast)
+_ = Task.Run(async () =>
+{
+    while (true)
+    {
+        await Task.Delay(TimeSpan.FromSeconds(10));
+        await Router.Publish("system/status", "alive");
+    }
+});
+
+await host.RunAsync();
+```
+
+Clients subscribe and receive pushes over the protocol:
 
 ```
 Client A:  Sub|sensors/temperature||msg-001|1     → subscribes with QoS 1
-Client B:  Pub|sensors/temperature|22.5           → publishes to topic
+Client B:  Call|submit-reading|22.5               → triggers server-side Router.Publish
 Client A:  ← receives push {MessageId, Topic: "sensors/temperature", Payload: "22.5", Qos: 1}
 Client A:  Ack|<messageId>                        → acknowledges delivery (QoS 1)
 ```
 
-The server can also publish directly from an RPC handler using `Router.Publish`:
+Clients can also publish directly without going through an RPC handler:
 
-```csharp
-Router.Operation("broadcast", async request =>
-{
-    var count = await Router.Publish("notifications/global", request?.Payload);
-    return OperationResult.Ok($"Sent to {count} subscribers");
-});
+```
+Client B:  Pub|sensors/temperature|22.5           → publishes directly to topic
 ```
 
 Wildcard subscriptions work the same way:
